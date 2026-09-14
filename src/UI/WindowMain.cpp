@@ -281,7 +281,7 @@ void WindowMain::pBtStream(bool clicked)
                 return;
             }
             t2.setServerType(ServerType::Official);
-            t2.setLoginInfo(uid, game_token);
+            t2.setLoginInfo(uid, game_token, stoken, mid);
         }
         else if (type == "崩坏3B服")
         {

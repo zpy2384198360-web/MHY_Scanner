@@ -36,6 +36,17 @@ void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string
 {
     this->uid = uid;
     this->gameToken = gameToken;
+    this->stoken.clear();
+    this->mid.clear();
+}
+
+void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string_view gameToken,
+                                   const std::string_view stoken, const std::string_view mid)
+{
+    this->uid = uid;
+    this->gameToken = gameToken;
+    this->stoken = stoken;
+    this->mid = mid;
 }
 
 void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string_view gameToken, const std::string& name)
@@ -43,6 +54,8 @@ void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string
     this->uid = uid;
     this->gameToken = gameToken;
     this->m_name = name;
+    this->stoken.clear();
+    this->mid.clear();
 }
 
 void QRCodeForStream::setServerType(const ServerType servertype)
@@ -61,6 +74,7 @@ void QRCodeForStream::LoginOfficial()
         }
         if (pAVPacket->stream_index != videoStreamIndex)
         {
+            av_packet_unref(pAVPacket);
             continue;
         }
         avcodec_send_packet(pAVCodecContext, pAVPacket);
@@ -95,43 +109,40 @@ void QRCodeForStream::LoginOfficial()
                     return;
                 }
                 const std::string ticket(str.data() + str.size() - 24, 24);
-                if (mtx.try_lock())
+                std::unique_lock lock(mtx, std::try_to_lock);
+                if (!lock.owns_lock() || !m_stop.load())
+                    return;
+
+                if (lastTicket == ticket)
+                    return;
+
+                const auto now = std::chrono::steady_clock::now();
+                if (lastAttemptTicket == ticket && now - lastAttemptAt < std::chrono::seconds(1))
+                    return;
+                lastAttemptTicket = ticket;
+                lastAttemptAt = now;
+
+                setGameType[view]();
+                const auto config = nlohmann::json::parse(m_config->getConfig(), nullptr, false);
+                const bool continuousScan = !config.is_discarded() && config.value("continuous_scan", false);
+                if (ScanQRLogin(scanUrl.data(), ticket, gameType))
                 {
-                    if (!m_stop.load())
-                    {
-                        mtx.unlock();
-                        return;
-                    }
-                    if (lastTicket == ticket)
-                    {
-                        mtx.unlock();
-                        return;
-                    }
-                    setGameType[view]();
                     lastTicket = ticket;
-                    nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
-                    const bool continuousScan = config.value("continuous_scan", false);
-                    if (ScanQRLogin(scanUrl.data(), ticket, gameType))
+                    if ((!config.is_discarded() && config.value("auto_login", false)) || continuousScan)
                     {
-                        if (config.value("auto_login", false) || continuousScan)
-                        {
-                            continueLastLogin();
-                        }
-                        else
-                        {
-                            Q_EMIT loginConfirm(gameType, false);
-                        }
+                        continueLastLogin();
                     }
                     else
                     {
-                        Q_EMIT loginResults(ScanRet::FAILURE_1);
+                        Q_EMIT loginConfirm(gameType, false);
                     }
-                    if (!continuousScan)
-                    {
-                        stop();
-                    }
-                    mtx.unlock();
                 }
+                else
+                {
+                    Q_EMIT loginResults(ScanRet::FAILURE_1);
+                }
+                if (!continuousScan)
+                    stop();
             });
         }
         av_frame_unref(pAVFrame);
@@ -150,6 +161,7 @@ void QRCodeForStream::LoginBH3BiliBili()
         }
         if (pAVPacket->stream_index != videoStreamIndex)
         {
+            av_packet_unref(pAVPacket);
             continue;
         }
         avcodec_send_packet(pAVCodecContext, pAVPacket);
@@ -184,42 +196,39 @@ void QRCodeForStream::LoginBH3BiliBili()
                     return;
                 }
                 const std::string ticket = str.substr(str.length() - 24);
-                if (mtx.try_lock())
+                std::unique_lock lock(mtx, std::try_to_lock);
+                if (!lock.owns_lock() || !m_stop.load())
+                    return;
+
+                if (lastTicket == ticket)
+                    return;
+
+                const auto now = std::chrono::steady_clock::now();
+                if (lastAttemptTicket == ticket && now - lastAttemptAt < std::chrono::seconds(1))
+                    return;
+                lastAttemptTicket = ticket;
+                lastAttemptAt = now;
+
+                const auto config = nlohmann::json::parse(m_config->getConfig(), nullptr, false);
+                const bool continuousScan = !config.is_discarded() && config.value("continuous_scan", false);
+                if (ret = scanCheck(ticket); ret == ScanRet::SUCCESS)
                 {
-                    if (!m_stop.load())
-                    {
-                        mtx.unlock();
-                        return;
-                    }
-                    if (lastTicket == ticket)
-                    {
-                        mtx.unlock();
-                        return;
-                    }
                     lastTicket = ticket;
-                    nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
-                    const bool continuousScan = config.value("continuous_scan", false);
-                    if (ret = scanCheck(ticket); ret == ScanRet::SUCCESS)
+                    if ((!config.is_discarded() && config.value("auto_login", false)) || continuousScan)
                     {
-                        if (config.value("auto_login", false) || continuousScan)
-                        {
-                            continueLastLogin();
-                        }
-                        else
-                        {
-                            Q_EMIT loginConfirm(GameType::Honkai3_BiliBili, false);
-                        }
+                        continueLastLogin();
                     }
                     else
                     {
-                        Q_EMIT loginResults(ret);
+                        Q_EMIT loginConfirm(GameType::Honkai3_BiliBili, false);
                     }
-                    if (!continuousScan)
-                    {
-                        stop();
-                    }
-                    mtx.unlock();
                 }
+                else
+                {
+                    Q_EMIT loginResults(ret);
+                }
+                if (!continuousScan)
+                    stop();
             });
         }
         av_frame_unref(pAVFrame);
@@ -320,6 +329,16 @@ void QRCodeForStream::continueLastLogin()
         using enum ServerType;
     case Official:
     {
+        if (!stoken.empty() && !mid.empty())
+        {
+            auto [code, refreshedGameToken] = GetGameTokenByStoken(stoken, mid);
+            if (code != 0 || refreshedGameToken.empty())
+            {
+                Q_EMIT loginResults(ScanRet::FAILURE_2);
+                break;
+            }
+            gameToken = std::move(refreshedGameToken);
+        }
         bool b = ConfirmQRLogin(confirmUrl, uid, gameToken, lastTicket, gameType);
         if (b)
         {
@@ -347,6 +366,9 @@ void QRCodeForStream::run()
     threadPool.setMaxThreadCount(threadNumber);
     m_stop.store(true);
     ret = ScanRet::UNKNOW;
+    lastTicket.clear();
+    lastAttemptTicket.clear();
+    lastAttemptAt = {};
     //TODO 获取直播流地址放在这里
     if (init())
     {
@@ -367,7 +389,12 @@ void QRCodeForStream::run()
             break;
         }
     }
-    if (ret == ScanRet::LIVESTOP)
+    else
+    {
+        ret = ScanRet::STREAMERROR;
+    }
+    threadPool.waitForDone();
+    if (ret == ScanRet::LIVESTOP || ret == ScanRet::STREAMERROR)
     {
         emit loginResults(ret);
     }

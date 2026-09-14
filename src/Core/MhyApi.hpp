@@ -365,6 +365,9 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
 
 inline bool ScanQRLogin(const std::string_view url, const std::string_view ticket, GameType gameType)
 {
+    if (url.empty() || ticket.empty())
+        return false;
+
     const auto response = cpr::Post(
         cpr::Url{ url },
         cpr::Body{ nlohmann::json{
@@ -374,12 +377,25 @@ inline bool ScanQRLogin(const std::string_view url, const std::string_view ticke
                        .dump() },
         cpr::Header{ { "Content-Type", "application/json" } });
 
-    const auto j = nlohmann::json::parse(response.text);
-    return j.value("retcode", -1) == 0;
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return false;
+
+    try
+    {
+        const auto j = nlohmann::json::parse(response.text);
+        return j.value("retcode", -1) == 0;
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return false;
+    }
 }
 
 inline bool ConfirmQRLogin(const std::string_view url, const std::string_view uid, const std::string_view gameToken, const std::string_view ticket, GameType gameType)
 {
+    if (url.empty() || uid.empty() || gameToken.empty() || ticket.empty())
+        return false;
+
     const auto response = cpr::Post(
         cpr::Url{ url },
         cpr::Body{ nlohmann::json{
@@ -390,8 +406,18 @@ inline bool ConfirmQRLogin(const std::string_view url, const std::string_view ui
                        .dump() },
         cpr::Header{ { "Content-Type", "application/json" } });
 
-    const auto j = nlohmann::json::parse(response.text);
-    return j.value("retcode", -1) == 0;
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return false;
+
+    try
+    {
+        const auto j = nlohmann::json::parse(response.text);
+        return j.value("retcode", -1) == 0;
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return false;
+    }
 }
 
 inline std::string makeSign(const nlohmann::json& data)
