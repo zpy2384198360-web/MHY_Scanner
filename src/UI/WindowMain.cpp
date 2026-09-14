@@ -174,17 +174,15 @@ void WindowMain::AddAccount()
         }
         //TODO 有预期外信号触发,潜在bug
         insertTableItems(QString::fromStdString(uid), QString::fromStdString(name), QString::fromStdString(type), "");
-        QThreadPool::globalInstance()->start([this, token, uid, name, type, mid] {
-            int num{ userinfo["num"] };
-            userinfo["account"][num]["access_key"] = token;
-            userinfo["account"][num]["uid"] = uid;
-            userinfo["account"][num]["name"] = name;
-            userinfo["account"][num]["type"] = type;
-            userinfo["account"][num]["note"] = "";
-            userinfo["account"][num]["mid"] = mid;
-            userinfo["num"] = num + 1;
-            m_config->updateConfig(userinfo.dump());
-        });
+        int num{ userinfo["num"] };
+        userinfo["account"][num]["access_key"] = token;
+        userinfo["account"][num]["uid"] = uid;
+        userinfo["account"][num]["name"] = name;
+        userinfo["account"][num]["type"] = type;
+        userinfo["account"][num]["note"] = "";
+        userinfo["account"][num]["mid"] = mid;
+        userinfo["num"] = num + 1;
+        m_config->updateConfig(userinfo.dump());
         QMessageBox::information(this, "提示", "添加成功", QMessageBox::Yes);
     });
     windowLogin->show();

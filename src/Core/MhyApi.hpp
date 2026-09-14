@@ -187,19 +187,73 @@ inline std::tuple<int, std::string> GetGameTokenByStoken(
     const std::string_view stoken,
     const std::string_view mid)
 {
+    if (stoken.empty() || mid.empty())
+        return { -1, {} };
+
+    const auto requestByCookie = [stoken, mid](const std::string_view tokenName) -> std::tuple<int, std::string> {
+        const auto response = cpr::Get(
+            cpr::Url{ api::mhy::takumi::game_token },
+            cpr::Header{
+                { "Accept", "application/json" },
+                { "Cookie", std::string(tokenName) + "=" + std::string(stoken) + "; mid=" + std::string(mid) }
+            });
+
+        if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+            return { -1, {} };
+
+        try
+        {
+            const auto j = nlohmann::json::parse(response.text);
+            const int retcode = j.value("retcode", -1);
+            if (retcode != 0 || !j.contains("data"))
+                return { retcode, {} };
+            return { 0, j["data"].value("game_token", std::string{}) };
+        }
+        catch (const nlohmann::json::exception&)
+        {
+            return { -1, {} };
+        }
+    };
+
+    if (stoken.starts_with("v2_"))
+    {
+        auto result = requestByCookie("stoken_v2");
+        if (std::get<0>(result) == 0 && !std::get<1>(result).empty())
+            return result;
+    }
+
+    {
+        auto result = requestByCookie("stoken");
+        if (std::get<0>(result) == 0 && !std::get<1>(result).empty())
+            return result;
+    }
+
+    // Older accounts may still require the legacy query-parameter form.
     const auto response = cpr::Get(
         cpr::Url{ api::mhy::takumi::game_token },
         cpr::Parameters{
-            { "stoken", stoken.data() },
-            { "mid", mid.data() } });
+            { "stoken", std::string(stoken) },
+            { "mid", std::string(mid) } });
 
-    const auto j = nlohmann::json::parse(response.text);
-    const int retcode = j.value("retcode", -1);
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return { -1, {} };
 
-    if (retcode != 0)
-        return { retcode, {} };
+    try
+    {
+        const auto j = nlohmann::json::parse(response.text);
+        const int retcode = j.value("retcode", -1);
+        if (retcode != 0 || !j.contains("data"))
+            return { retcode, {} };
 
-    return { 0, j["data"]["game_token"].get<std::string>() };
+        const std::string gameToken = j["data"].value("game_token", std::string{});
+        if (gameToken.empty())
+            return { -1, {} };
+        return { 0, gameToken };
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return { -1, {} };
+    }
 }
 
 inline std::tuple<int, GeetestData> CreateLoginCaptcha(
