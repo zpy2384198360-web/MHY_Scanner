@@ -262,8 +262,15 @@ void WindowLogin::Initconnect()
         }
         else
         {
-            QRCodeQImage = CV_8UC1_MatToQImage(QrcodeMat - cv::Scalar(200));
-            QRCodelabel->setPixmap(QPixmap::fromImage(QRCodeQImage));
+            if (!QrcodeMat.empty())
+            {
+                QRCodeQImage = CV_8UC1_MatToQImage(QrcodeMat - cv::Scalar(200));
+                QRCodelabel->setPixmap(QPixmap::fromImage(QRCodeQImage));
+            }
+            else
+            {
+                QRCodelabel->setText("二维码加载失败");
+            }
             UpdateQrcodeButton->setVisible(true);
         }
     });
@@ -335,6 +342,10 @@ void WindowLogin::Initconnect()
                 {
                     emit showMessagebox("请求过于频繁，请稍后再试");
                 }
+                else
+                {
+                    emit showMessagebox(QString("验证码发送失败（错误码 %1）").arg(code));
+                }
             });
         }
     });
@@ -369,13 +380,22 @@ void WindowLogin::Initconnect()
                 m_WindowGeeTest.Init(stringTowstring(GeeTestInfo.gt), stringTowstring(GeeTestInfo.challenge));
                 emit showWindowGeeTest(true);
             }
-            else if (!GeeTestInfo.mmt_type)
+            else if (code == 0)
             {
+                GeeTestInfo = data;
                 emit ButtonEnabled(true);
             }
             else if (code == -3008)
             {
                 emit showMessagebox("手机号错误");
+            }
+            else if (code == -3006)
+            {
+                emit showMessagebox("请求过于频繁，请稍后再试");
+            }
+            else
+            {
+                emit showMessagebox(QString("验证码发送失败（错误码 %1）").arg(code));
             }
         });
     });
@@ -389,8 +409,17 @@ void WindowLogin::Initconnect()
             }
             else if (result.retcode == 0)
             {
+                if (result.data.V2Token.empty() || result.data.aid.empty() || result.data.mid.empty())
+                {
+                    emit showMessagebox("登录返回的数据不完整，请重新尝试");
+                    return;
+                }
                 const std::string name{ getMysUserName(result.data.aid) };
                 emit AddUserInfo(name, result.data.V2Token, result.data.aid, result.data.mid, "官服");
+            }
+            else
+            {
+                emit showMessagebox(QString("短信登录失败（错误码 %1）").arg(result.retcode));
             }
         });
     });
@@ -524,7 +553,12 @@ void WindowLogin::StartQRCodeLogin()
         QRCodelabel->setText("二维码加载中");
         AllowDrawQRCode.store(false);
         const std::string qrcodeString{ GetLoginQrcodeUrl() };
-        ticket = std::string{ qrcodeString.data() + qrcodeString.size() - 24, 24 };
+        ticket = GetLoginQrcodeTicket();
+        if (qrcodeString.empty() || ticket.empty())
+        {
+            emit QrcodeLoginResult(false);
+            return;
+        }
         QrcodeMat = createQrCodeToCvMat(qrcodeString);
         QRCodeQImage = CV_8UC1_MatToQImage(QrcodeMat);
         if (AllowDrawQRCode.load())
@@ -538,7 +572,7 @@ void WindowLogin::StartQRCodeLogin()
 
 void WindowLogin::CheckQRCodeLoginState()
 {
-    auto [state, uid, game_token] = GetQRCodeState(ticket);
+    auto [state, uid, mid, stoken] = GetQRCodeState(ticket);
     switch (state)
     {
     case LoginQRCodeState::Init:
@@ -552,8 +586,7 @@ void WindowLogin::CheckQRCodeLoginState()
     break;
     case LoginQRCodeState::Confirmed:
     {
-        auto [code, mid, stoken] = GetStokenByGameToken(uid, game_token);
-        if (code == 0)
+        if (!uid.empty() && !mid.empty() && !stoken.empty())
         {
             std::string name{ getMysUserName(uid) };
             emit AddUserInfo(name, stoken, uid, mid, "官服");
@@ -563,6 +596,7 @@ void WindowLogin::CheckQRCodeLoginState()
         else
         {
             emit showMessagebox("获取STOKEN失败！");
+            emit QrcodeLoginResult(false);
         }
         return;
     }

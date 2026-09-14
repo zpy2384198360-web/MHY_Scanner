@@ -7,6 +7,7 @@
 #include <sstream>
 #include <optional>
 #include <iostream>
+#include <tuple>
 
 #include <nlohmann/json.hpp>
 #include <cpr/cpr.h>
@@ -18,7 +19,7 @@
 #include "TimeStamp.hpp"
 
 static const std::string device_id{ CreateUUID::CreateUUID4() };
-static GameType loginType{ GameType::TearsOfThemis };
+static std::string loginQrcodeTicket{};
 
 [[nodiscard]] inline std::string DataSignAlgorithmVersionGen1()
 {
@@ -67,61 +68,89 @@ inline cpr::Header GetRequestHeader()
     return headers;
 }
 
-inline std::string GetLoginQrcodeUrl(const GameType type = loginType)
+inline cpr::Header GetPassportQRCodeHeader()
 {
-    auto res = cpr::Post(
-        cpr::Url{ api::mhy::hk4e::qrcode_fetch },
-        cpr::Body{ nlohmann::json{
-            { "app_id", static_cast<int>(type) },
-            { "device", device_id } }
-                       .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
-
-    auto data = nlohmann::json::parse(res.text);
-    std::string qrcodeUrl = data["data"]["url"].get<std::string>();
-    return qrcodeUrl;
+    return cpr::Header{
+        { "Content-Type", "application/json" },
+        { "x-rpc-app_id", "dw9y09jqjpxc" },
+        { "x-rpc-device_id", device_id }
+    };
 }
 
-inline std::tuple<LoginQRCodeState, std::string, std::string> GetQRCodeState(
-    const std::string_view ticket,
-    const GameType type = loginType)
+inline std::string GetLoginQrcodeUrl()
 {
+    loginQrcodeTicket.clear();
     const auto response = cpr::Post(
-        cpr::Url{ api::mhy::hk4e::qrcode_query },
-        cpr::Body{ nlohmann::json{
-            { "app_id", static_cast<int>(type) },
-            { "device", device_id },
-            { "ticket", ticket } }
-                       .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
+        cpr::Url{ api::mhy::passport::create_qr_login },
+        cpr::Body{ "" },
+        GetPassportQRCodeHeader());
 
-    const auto data = nlohmann::json::parse(response.text);
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return {};
 
-    if (data.value("retcode", -1) != 0)
-        return { LoginQRCodeState::Expired, {}, {} };
-
-    static const std::unordered_map<std::string, LoginQRCodeState> stateMap{
-        { "Init", LoginQRCodeState::Init },
-        { "Scanned", LoginQRCodeState::Scanned },
-        { "Confirmed", LoginQRCodeState::Confirmed },
-    };
-
-    const auto stat = data["data"]["stat"].get<std::string>();
-    const auto it = stateMap.find(stat);
-
-    if (it == stateMap.end())
-        return { LoginQRCodeState::Expired, {}, {} };
-
-    if (it->second == LoginQRCodeState::Confirmed)
+    try
     {
-        const auto payload = nlohmann::json::parse(
-            data["data"]["payload"]["raw"].get<std::string>());
-        return { LoginQRCodeState::Confirmed,
-                 payload["uid"].get<std::string>(),
-                 payload["token"].get<std::string>() };
-    }
+        const auto data = nlohmann::json::parse(response.text);
+        if (data.value("retcode", -1) != 0 || !data.contains("data"))
+            return {};
 
-    return { it->second, {}, {} };
+        loginQrcodeTicket = data["data"].value("ticket", "");
+        return data["data"].value("url", "");
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        loginQrcodeTicket.clear();
+        return {};
+    }
+}
+
+inline const std::string& GetLoginQrcodeTicket()
+{
+    return loginQrcodeTicket;
+}
+
+inline std::tuple<LoginQRCodeState, std::string, std::string, std::string> GetQRCodeState(
+    const std::string_view ticket)
+{
+    if (ticket.empty())
+        return { LoginQRCodeState::Expired, {}, {}, {} };
+
+    const auto response = cpr::Post(
+        cpr::Url{ api::mhy::passport::query_qr_login_status },
+        cpr::Body{ nlohmann::json{ { "ticket", std::string(ticket) } }.dump() },
+        GetPassportQRCodeHeader());
+
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return { LoginQRCodeState::Expired, {}, {}, {} };
+
+    try
+    {
+        const auto data = nlohmann::json::parse(response.text);
+        if (data.value("retcode", -1) != 0 || !data.contains("data"))
+            return { LoginQRCodeState::Expired, {}, {}, {} };
+
+        const std::string status = data["data"].value("status", "");
+        if (status == "Created" || status == "Init")
+            return { LoginQRCodeState::Init, {}, {}, {} };
+        if (status == "Scanned")
+            return { LoginQRCodeState::Scanned, {}, {}, {} };
+        if (status != "Confirmed")
+            return { LoginQRCodeState::Expired, {}, {}, {} };
+
+        const auto& payload = data["data"];
+        if (!payload.contains("user_info") || !payload.contains("tokens") ||
+            !payload["tokens"].is_array() || payload["tokens"].empty())
+            return { LoginQRCodeState::Expired, {}, {}, {} };
+
+        return { LoginQRCodeState::Confirmed,
+                 payload["user_info"].value("aid", ""),
+                 payload["user_info"].value("mid", ""),
+                 payload["tokens"][0].value("token", "") };
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return { LoginQRCodeState::Expired, {}, {}, {} };
+    }
 }
 
 inline std::string getMysUserName(const std::string_view uid)
@@ -186,13 +215,25 @@ inline std::tuple<int, GeetestData> CreateLoginCaptcha(
     if (!aigis.empty())
         reqHeaders["X-Rpc-Aigis"] = aigis;
     const auto response = cpr::Post(
-        cpr::Url{ api::mhy::passport::login_by_mobile_captcha },
+        cpr::Url{ api::mhy::passport::create_captcha },
         cpr::Body{ body },
         cpr::Header{ reqHeaders });
 
-    const auto j = nlohmann::json::parse(response.text);
-    const int retcode = j.value("retcode", -1);
     GeetestData result{};
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return { -1, result };
+
+    nlohmann::json j;
+    try
+    {
+        j = nlohmann::json::parse(response.text);
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return { -1, result };
+    }
+
+    const int retcode = j.value("retcode", -1);
     if (retcode == 0)
     {
         result.action_type = j["data"]["action_type"].get<std::string>();
@@ -228,32 +269,43 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
             std::string mid{};
         } data;
     } result;
-#if 0
-	const std::string RequestBody{ std::format(R"({{"area_code":"{}","action_type":"{}","captcha":"{}","mobile":"{}"}})", Encrypt("+86"), actionType, captcha, Encrypt(mobile)) };
-    std::map<std::string, std::string> headers{ GetRequestHeader() };
-    headers["DS"] = DataSignAlgorithmVersionGen2(RequestBody, "");
+    const std::string requestBody{ nlohmann::json{
+        { "area_code", Encrypt("+86") },
+        { "action_type", std::string(actionType) },
+        { "captcha", std::string(captcha) },
+        { "mobile", Encrypt(mobile) } }
+                                           .dump() };
+    cpr::Header headers{ GetRequestHeader() };
+    headers["DS"] = DataSignAlgorithmVersionGen2(requestBody, "");
     if (!aigis.empty())
-    {
         headers["X-Rpc-Aigis"] = aigis;
-    }
-    HttpClient h;
-    std::string s;
-    h.PostRequest(s, URL_LoginByMobileCaptcha, RequestBody, headers);
-    //std::cout << s << std::endl;
-    json::Json j{};
-    j.parse(s);
-    result.retcode = j["retcode"];
-    if (result.retcode == -3205)
+
+    const auto response = cpr::Post(
+        cpr::Url{ api::mhy::passport::login_by_mobile_captcha },
+        cpr::Body{ requestBody },
+        cpr::Header{ headers });
+
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
     {
+        result.retcode = -1;
         return result;
     }
-    else if (result.retcode == 0)
+
+    try
     {
-        result.data.V2Token = j["data"]["token"]["token"];
-        result.data.aid = j["data"]["user_info"]["aid"];
-        result.data.mid = j["data"]["user_info"]["mid"];
+        const auto j = nlohmann::json::parse(response.text);
+        result.retcode = j.value("retcode", -1);
+        if (result.retcode == 0)
+        {
+            result.data.V2Token = j["data"]["token"].value("token", "");
+            result.data.aid = j["data"]["user_info"].value("aid", "");
+            result.data.mid = j["data"]["user_info"].value("mid", "");
+        }
     }
-#endif
+    catch (const nlohmann::json::exception&)
+    {
+        result.retcode = -1;
+    }
     return result;
 }
 
