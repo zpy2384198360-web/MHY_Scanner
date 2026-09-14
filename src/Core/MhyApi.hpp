@@ -94,8 +94,8 @@ inline std::string GetLoginQrcodeUrl()
         if (data.value("retcode", -1) != 0 || !data.contains("data"))
             return {};
 
-        loginQrcodeTicket = data["data"].value("ticket", "");
-        return data["data"].value("url", "");
+        loginQrcodeTicket = data["data"].value("ticket", std::string{});
+        return data["data"].value("url", std::string{});
     }
     catch (const nlohmann::json::exception&)
     {
@@ -129,7 +129,7 @@ inline std::tuple<LoginQRCodeState, std::string, std::string, std::string> GetQR
         if (data.value("retcode", -1) != 0 || !data.contains("data"))
             return { LoginQRCodeState::Expired, {}, {}, {} };
 
-        const std::string status = data["data"].value("status", "");
+        const std::string status = data["data"].value("status", std::string{});
         if (status == "Created" || status == "Init")
             return { LoginQRCodeState::Init, {}, {}, {} };
         if (status == "Scanned")
@@ -143,9 +143,9 @@ inline std::tuple<LoginQRCodeState, std::string, std::string, std::string> GetQR
             return { LoginQRCodeState::Expired, {}, {}, {} };
 
         return { LoginQRCodeState::Confirmed,
-                 payload["user_info"].value("aid", ""),
-                 payload["user_info"].value("mid", ""),
-                 payload["tokens"][0].value("token", "") };
+                 payload["user_info"].value("aid", std::string{}),
+                 payload["user_info"].value("mid", std::string{}),
+                 payload["tokens"][0].value("token", std::string{}) };
     }
     catch (const nlohmann::json::exception&)
     {
@@ -297,9 +297,9 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
         result.retcode = j.value("retcode", -1);
         if (result.retcode == 0)
         {
-            result.data.V2Token = j["data"]["token"].value("token", "");
-            result.data.aid = j["data"]["user_info"].value("aid", "");
-            result.data.mid = j["data"]["user_info"].value("mid", "");
+            result.data.V2Token = j["data"]["token"].value("token", std::string{});
+            result.data.aid = j["data"]["user_info"].value("aid", std::string{});
+            result.data.mid = j["data"]["user_info"].value("mid", std::string{});
         }
     }
     catch (const nlohmann::json::exception&)
