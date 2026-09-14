@@ -288,6 +288,13 @@ QTableWidget::item:selected
       </widget>
      </item>
      <item>
+      <widget class="QCheckBox" name="checkBoxContinuousScan">
+       <property name="text">
+        <string>连续自动确认</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QCheckBox" name="checkBoxAutoScreen">
        <property name="enabled">
         <bool>true</bool>

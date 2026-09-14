@@ -94,12 +94,7 @@ void QRCodeForStream::LoginOfficial()
                 {
                     return;
                 }
-                const std::string_view ticket(str.data() + str.size() - 24, 24);
-                setGameType[view]();
-                if (lastTicket == ticket)
-                {
-                    return;
-                }
+                const std::string ticket(str.data() + str.size() - 24, 24);
                 if (mtx.try_lock())
                 {
                     if (!m_stop.load())
@@ -107,11 +102,18 @@ void QRCodeForStream::LoginOfficial()
                         mtx.unlock();
                         return;
                     }
+                    if (lastTicket == ticket)
+                    {
+                        mtx.unlock();
+                        return;
+                    }
+                    setGameType[view]();
+                    lastTicket = ticket;
+                    nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
+                    const bool continuousScan = config.value("continuous_scan", false);
                     if (ScanQRLogin(scanUrl.data(), ticket, gameType))
                     {
-                        lastTicket = ticket;
-                        nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
-                        if (config["auto_login"])
+                        if (config.value("auto_login", false) || continuousScan)
                         {
                             continueLastLogin();
                         }
@@ -124,7 +126,10 @@ void QRCodeForStream::LoginOfficial()
                     {
                         Q_EMIT loginResults(ScanRet::FAILURE_1);
                     }
-                    stop();
+                    if (!continuousScan)
+                    {
+                        stop();
+                    }
                     mtx.unlock();
                 }
             });
@@ -178,11 +183,7 @@ void QRCodeForStream::LoginBH3BiliBili()
                 {
                     return;
                 }
-                const std::string& ticket = str.substr(str.length() - 24);
-                if (lastTicket == ticket)
-                {
-                    return;
-                }
+                const std::string ticket = str.substr(str.length() - 24);
                 if (mtx.try_lock())
                 {
                     if (!m_stop.load())
@@ -190,11 +191,17 @@ void QRCodeForStream::LoginBH3BiliBili()
                         mtx.unlock();
                         return;
                     }
+                    if (lastTicket == ticket)
+                    {
+                        mtx.unlock();
+                        return;
+                    }
+                    lastTicket = ticket;
+                    nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
+                    const bool continuousScan = config.value("continuous_scan", false);
                     if (ret = scanCheck(ticket); ret == ScanRet::SUCCESS)
                     {
-                        lastTicket = ticket;
-                        nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
-                        if (config["auto_login"])
+                        if (config.value("auto_login", false) || continuousScan)
                         {
                             continueLastLogin();
                         }
@@ -207,7 +214,10 @@ void QRCodeForStream::LoginBH3BiliBili()
                     {
                         Q_EMIT loginResults(ret);
                     }
-                    stop();
+                    if (!continuousScan)
+                    {
+                        stop();
+                    }
                     mtx.unlock();
                 }
             });

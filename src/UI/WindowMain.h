@@ -61,6 +61,7 @@ public Q_SLOTS:
     void checkBoxAutoScreen(bool clicked);
     void checkBoxAutoExit(bool clicked);
     void checkBoxAutoLogin(bool clicked);
+    void checkBoxContinuousScan(bool clicked);
 
     void islogin(const ScanRet ret);
     void loginConfirmTip(const GameType gameType, bool b);

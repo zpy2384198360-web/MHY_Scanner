@@ -56,6 +56,7 @@ WindowMain::WindowMain(QWidget* parent) :
     connect(ui.checkBoxAutoScreen, &QCheckBox::clicked, this, &WindowMain::checkBoxAutoScreen);
     connect(ui.checkBoxAutoExit, &QCheckBox::clicked, this, &WindowMain::checkBoxAutoExit);
     connect(ui.checkBoxAutoLogin, &QCheckBox::clicked, this, &WindowMain::checkBoxAutoLogin);
+    connect(ui.checkBoxContinuousScan, &QCheckBox::clicked, this, &WindowMain::checkBoxContinuousScan);
     connect(ui.pBtStream, &QPushButton::clicked, this, &WindowMain::pBtStream);
     connect(ui.tableWidget, &QTableWidget::cellClicked, this, &WindowMain::getInfo);
     connect(&t1, &QRCodeForScreen::loginResults, this, &WindowMain::islogin);
@@ -315,6 +316,14 @@ void WindowMain::showEvent(QShowEvent* event)
 
 void WindowMain::islogin(const ScanRet ret)
 {
+    const bool continuousStream = sender() == &t2 &&
+                                  userinfo.value("continuous_scan", false) &&
+                                  t2.isRunning();
+    if (continuousStream && ret != ScanRet::LIVESTOP && ret != ScanRet::STREAMERROR)
+    {
+        ui.pBtStream->setText(ret == ScanRet::SUCCESS ? "已确认，继续监视" : "本次失败，继续监视");
+        return;
+    }
     if (ret == ScanRet::SUCCESS && (bool)userinfo["auto_exit"] == true)
     {
         exit(0);
@@ -446,6 +455,20 @@ void WindowMain::checkBoxAutoLogin(bool clicked)
     else if (state == Qt::Unchecked)
     {
         userinfo["auto_login"] = false;
+        userinfo["continuous_scan"] = false;
+        ui.checkBoxContinuousScan->setChecked(false);
+    }
+    m_config->updateConfig(userinfo.dump());
+}
+
+void WindowMain::checkBoxContinuousScan(bool clicked)
+{
+    const bool enabled = ui.checkBoxContinuousScan->checkState() == Qt::Checked;
+    userinfo["continuous_scan"] = enabled;
+    if (enabled)
+    {
+        userinfo["auto_login"] = true;
+        ui.checkBoxAutoLogin->setChecked(true);
     }
     m_config->updateConfig(userinfo.dump());
 }
@@ -648,6 +671,11 @@ void WindowMain::configInitUpdate()
         }
         if (userinfo["auto_login"])
         {
+            ui.checkBoxAutoLogin->setChecked(true);
+        }
+        if (userinfo.value("continuous_scan", false))
+        {
+            ui.checkBoxContinuousScan->setChecked(true);
             ui.checkBoxAutoLogin->setChecked(true);
         }
     }
