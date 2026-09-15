@@ -21,7 +21,6 @@ extern "C"
 #include <QThreadPool>
 
 #include "ApiDefs.hpp"
-#include "ConfigDate.h"
 #include "ScannerBase.hpp"
 
 class QRCodeForStream final :
@@ -39,6 +38,9 @@ public:
                               const std::string_view mid);
     void setLoginInfo(const std::string_view uid, const std::string_view gameToken, const std::string& name);
     void setServerType(const ServerType servertype);
+    void setAutoLogin(bool enabled);
+    void setContinuousScan(bool enabled);
+    [[nodiscard]] bool isContinuousScan() const;
     void setUrl(const std::string& url, const std::map<std::string, std::string> heard = {});
     auto init() -> bool;
     void run();
@@ -60,7 +62,6 @@ private:
     std::string mid;
     std::string lastAttemptTicket;
     std::chrono::steady_clock::time_point lastAttemptAt{};
-    ConfigDate* m_config;
     ServerType servertype;
     ScanRet ret = ScanRet::UNKNOW;
     AVDictionary* pAvdictionary;
@@ -75,4 +76,6 @@ private:
     const int threadNumber{ 2 };
     QThreadPool threadPool;
     std::atomic<bool> m_stop;
+    std::atomic<bool> m_autoLogin{ false };
+    std::atomic<bool> m_continuousScan{ false };
 };

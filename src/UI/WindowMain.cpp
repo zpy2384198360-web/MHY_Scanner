@@ -252,12 +252,16 @@ void WindowMain::pBtstartScreen(bool clicked)
 
 void WindowMain::pBtStream(bool clicked)
 {
+    const bool autoLogin = ui.checkBoxAutoLogin->isChecked();
+    const bool continuousScan = ui.checkBoxContinuousScan->isChecked();
+    const std::string roomId = ui.lineEditLiveId->text().toStdString();
+    const auto livePlatform = static_cast<LivePlatform>(ui.comboBox->currentIndex());
     ui.pBtstartScreen->setEnabled(false);
     ui.pBtStream->setEnabled(false);
     ui.pBtStream->setText("加载中。。。");
     QApplication::processEvents();
 
-    QThreadPool::globalInstance()->start([&, clicked]() {
+    QThreadPool::globalInstance()->start([&, clicked, autoLogin, continuousScan, roomId, livePlatform]() {
         if (!clicked)
         {
             emit StopScanner();
@@ -271,7 +275,7 @@ void WindowMain::pBtStream(bool clicked)
         std::string stream_link;
         std::map<std::string, std::string> heards;
         //检查直播间状态
-        if (!GetStreamLink(ui.lineEditLiveId->text().toStdString(), stream_link, heards))
+        if (!GetStreamLink(livePlatform, roomId, stream_link, heards))
         {
             emit StopScanner();
             return;
@@ -307,6 +311,8 @@ void WindowMain::pBtStream(bool clicked)
             t2.setServerType(ServerType::BH3_BiliBili);
             t2.setLoginInfo(uid, stoken, result.uname);
         }
+        t2.setAutoLogin(autoLogin);
+        t2.setContinuousScan(continuousScan);
         t2.start();
         emit StartScanLive();
     });
@@ -324,12 +330,10 @@ void WindowMain::showEvent(QShowEvent* event)
 
 void WindowMain::islogin(const ScanRet ret)
 {
-    const bool continuousStream = sender() == &t2 &&
-                                  userinfo.value("continuous_scan", false) &&
-                                  t2.isRunning();
+    const bool continuousStream = sender() == &t2 && t2.isContinuousScan();
     if (continuousStream && ret != ScanRet::LIVESTOP && ret != ScanRet::STREAMERROR)
     {
-        ui.pBtStream->setText(ret == ScanRet::SUCCESS ? "已确认，继续监视" : "本次失败，继续监视");
+        ui.pBtStream->setText(ret == ScanRet::SUCCESS ? "已确认，继续检测" : "未抢到，继续检测");
         return;
     }
     if (ret == ScanRet::SUCCESS && (bool)userinfo["auto_exit"] == true)
@@ -351,10 +355,10 @@ void WindowMain::islogin(const ScanRet ret)
     case ScanRet::UNKNOW:
         break;
     case ScanRet::FAILURE_1:
-        Show_QMessageBox("提示", "扫码失败!");
+        Show_QMessageBox("提示", "二维码已失效或已被其他人抢先！");
         break;
     case ScanRet::FAILURE_2:
-        Show_QMessageBox("提示", "扫码二次确认失败!");
+        Show_QMessageBox("提示", "确认失败，可能已被其他人抢先！");
         break;
     case ScanRet::LIVESTOP:
         Show_QMessageBox("提示", "直播中断!");
@@ -530,9 +534,13 @@ bool WindowMain::checkDuplicates(const std::string uid)
     return false;
 }
 
-bool WindowMain::GetStreamLink(const std::string& roomid, std::string& url, std::map<std::string, std::string>& heards)
+bool WindowMain::GetStreamLink(
+    const LivePlatform platform,
+    const std::string& roomid,
+    std::string& url,
+    std::map<std::string, std::string>& heards)
 {
-    auto info = GetLiveInfo(static_cast<LivePlatform>(ui.comboBox->currentIndex()), roomid);
+    auto info = GetLiveInfo(platform, roomid);
     if (info.status == LiveStreamStatus::Normal)
     {
         url = info.link;

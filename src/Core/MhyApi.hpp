@@ -381,16 +381,19 @@ inline std::string PandaScanQRCode(const std::string_view url, const std::string
     if (url.empty() || ticket.empty())
         return {};
 
-    const auto response = cpr::Post(
-        cpr::Url{ url },
-        cpr::Body{ nlohmann::json{
+    thread_local cpr::Session session;
+    session.SetUrl(cpr::Url{ url });
+    session.SetBody(cpr::Body{ nlohmann::json{
             { "passport_app_id", "bll8iq97cem8" },
             { "app_id", static_cast<int>(gameType) },
             { "device", device_id },
             { "ticket", std::string(ticket) },
             { "ts", GetUnixTimeStampSeconds() } }
-                       .dump() },
-        GetPassportQRCodeHeader("bll8iq97cem8"));
+                                    .dump() });
+    session.SetHeader(GetPassportQRCodeHeader("bll8iq97cem8"));
+    session.SetConnectTimeout(cpr::ConnectTimeout{ 1500 });
+    session.SetTimeout(cpr::Timeout{ 3000 });
+    const auto response = session.Post();
 
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return {};
@@ -420,13 +423,16 @@ inline bool PassportQRCodeLogin(
     const std::string endpoint = confirm
                                      ? static_cast<std::string>(api::mhy::passport::confirm_qr_login)
                                      : static_cast<std::string>(api::mhy::passport::scan_qr_login);
-    const auto response = cpr::Post(
-        cpr::Url{ endpoint },
-        cpr::Body{ nlohmann::json{
+    thread_local cpr::Session session;
+    session.SetUrl(cpr::Url{ endpoint });
+    session.SetBody(cpr::Body{ nlohmann::json{
             { "ticket", ticket },
             { "token_types", nlohmann::json::array({ tokenType }) } }
-                       .dump() },
-        headers);
+                                    .dump() });
+    session.SetHeader(headers);
+    session.SetConnectTimeout(cpr::ConnectTimeout{ 1500 });
+    session.SetTimeout(cpr::Timeout{ 3000 });
+    const auto response = session.Post();
 
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return false;

@@ -87,7 +87,8 @@ private:
     void liveIdError(const LiveStreamStatus status);
     int getSelectedRowIndex();
     bool checkDuplicates(const std::string uid);
-    bool GetStreamLink(const std::string& roomid, std::string& url, std::map<std::string, std::string>& heards);
+    bool GetStreamLink(LivePlatform platform, const std::string& roomid, std::string& url,
+                       std::map<std::string, std::string>& heards);
     OnlineUpdate o;
     configInitLoad configinitload;
     void SetWindowToFront() const;

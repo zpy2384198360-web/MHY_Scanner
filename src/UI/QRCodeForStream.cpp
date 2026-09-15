@@ -19,7 +19,6 @@ QRCodeForStream::QRCodeForStream(QObject* parent) :
 
 {
     av_log_set_level(AV_LOG_FATAL);
-    m_config = &(ConfigDate::getInstance());
 }
 
 QRCodeForStream::~QRCodeForStream()
@@ -60,6 +59,21 @@ void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string
 void QRCodeForStream::setServerType(const ServerType servertype)
 {
     this->servertype = servertype;
+}
+
+void QRCodeForStream::setAutoLogin(const bool enabled)
+{
+    m_autoLogin.store(enabled);
+}
+
+void QRCodeForStream::setContinuousScan(const bool enabled)
+{
+    m_continuousScan.store(enabled);
+}
+
+bool QRCodeForStream::isContinuousScan() const
+{
+    return m_continuousScan.load();
 }
 
 void QRCodeForStream::LoginOfficial()
@@ -116,14 +130,13 @@ void QRCodeForStream::LoginOfficial()
                 lastAttemptTicket = ticket;
                 lastAttemptAt = now;
 
-                const auto config = nlohmann::json::parse(m_config->getConfig(), nullptr, false);
-                const bool continuousScan = !config.is_discarded() && config.value("continuous_scan", false);
+                const bool continuousScan = m_continuousScan.load();
                 const std::string passportQrUrl = PandaScanQRCode(scanUrl, ticket, gameType);
                 if (!passportQrUrl.empty())
                 {
                     lastTicket = ticket;
                     lastQrCode = passportQrUrl;
-                    if ((!config.is_discarded() && config.value("auto_login", false)) || continuousScan)
+                    if (m_autoLogin.load() || continuousScan)
                     {
                         continueLastLogin();
                     }
@@ -204,12 +217,11 @@ void QRCodeForStream::LoginBH3BiliBili()
                 lastAttemptTicket = ticket;
                 lastAttemptAt = now;
 
-                const auto config = nlohmann::json::parse(m_config->getConfig(), nullptr, false);
-                const bool continuousScan = !config.is_discarded() && config.value("continuous_scan", false);
+                const bool continuousScan = m_continuousScan.load();
                 if (ret = scanCheck(ticket); ret == ScanRet::SUCCESS)
                 {
                     lastTicket = ticket;
-                    if ((!config.is_discarded() && config.value("auto_login", false)) || continuousScan)
+                    if (m_autoLogin.load() || continuousScan)
                     {
                         continueLastLogin();
                     }
@@ -265,11 +277,21 @@ void QRCodeForStream::setUrl(const std::string& url, const std::map<std::string,
     av_dict_set(&pAvdictionary, "rtbufsize", "0", 0);
     av_dict_set(&pAvdictionary, "delay", "0", 0);
     av_dict_set(&pAvdictionary, "buffer_size", "1000", 0);
+    av_dict_set(&pAvdictionary, "fflags", "nobuffer", 0);
+    av_dict_set(&pAvdictionary, "flags", "low_delay", 0);
+    av_dict_set(&pAvdictionary, "avioflags", "direct", 0);
+    av_dict_set(&pAvdictionary, "analyzeduration", "0", 0);
 }
 
 auto QRCodeForStream::init() -> bool
 {
     pAVFormatContext = avformat_alloc_context();
+    if (pAVFormatContext == nullptr)
+    {
+        std::cerr << "Error allocating format context" << std::endl;
+        return false;
+    }
+    pAVFormatContext->flags |= AVFMT_FLAG_NOBUFFER;
     if (avformat_open_input(&pAVFormatContext, streamUrl.c_str(), NULL, &pAvdictionary) != 0)
     {
         std::cerr << "Error opening input file" << std::endl;
@@ -302,7 +324,13 @@ auto QRCodeForStream::init() -> bool
         return false;
     }
     pAVCodecContext = avcodec_alloc_context3(decoder);
+    if (pAVCodecContext == nullptr)
+    {
+        std::cerr << "Error allocating codec context" << std::endl;
+        return false;
+    }
     avcodec_parameters_to_context(pAVCodecContext, videoStream->codecpar);
+    pAVCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
     if (avcodec_open2(pAVCodecContext, decoder, NULL) < 0)
     {
         std::cerr << "Error opening codec" << std::endl;

@@ -18,7 +18,7 @@ QRScanner::~QRScanner()
 
 void QRScanner::decodeSingle(const cv::Mat& img, std::string& qrCode)
 {
-#ifndef TESTSPEED
+#ifdef TESTSPEED
     auto startTime = std::chrono::high_resolution_clock::now();
 #endif
     const std::vector<std::string>& strDecoded = detector->detectAndDecode(img);
@@ -26,10 +26,10 @@ void QRScanner::decodeSingle(const cv::Mat& img, std::string& qrCode)
     {
         qrCode = strDecoded[0];
     }
-#ifndef TESTSPEED
+#ifdef TESTSPEED
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count();
-    std::cout << static_cast<float>(duration) / 1000000 << " decode: " << qrCode << std::endl;
+    std::cout << static_cast<float>(duration) / 1000000 << " decode" << std::endl;
 #endif
 }
 
