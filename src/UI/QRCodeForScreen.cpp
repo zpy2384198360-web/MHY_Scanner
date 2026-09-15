@@ -34,6 +34,8 @@ void QRCodeForScreen::setLoginInfo(const std::string& uid, const std::string& to
 {
     this->uid = uid;
     this->gameToken = token;
+    this->stoken.clear();
+    this->mid.clear();
 }
 
 void QRCodeForScreen::setLoginInfo(const std::string& uid, const std::string& token, const std::string& name)
@@ -41,6 +43,15 @@ void QRCodeForScreen::setLoginInfo(const std::string& uid, const std::string& to
     this->uid = uid;
     this->gameToken = token;
     this->m_name = name;
+    this->stoken.clear();
+    this->mid.clear();
+}
+
+void QRCodeForScreen::setPassportLoginInfo(const std::string& uid, const std::string& stoken, const std::string& mid)
+{
+    this->uid = uid;
+    this->stoken = stoken;
+    this->mid = mid;
 }
 
 void QRCodeForScreen::LoginOfficial()
@@ -69,17 +80,10 @@ void QRCodeForScreen::LoginOfficial()
             thread_local QRScanner qrScanners;
             std::string str;
             qrScanners.decodeSingle(img, str);
-            if (str.size() < 85)
-            {
+            std::string ticket;
+            if (!parseOfficialQRCode(str, ticket))
                 return;
-            }
-            std::string_view view(str.c_str() + 79, 3);
-            if (!setGameType.contains(view))
-            {
-                return;
-            }
-            setGameType[view]();
-            const std::string_view ticket(str.data() + str.size() - 24, 24);
+
             if (lastTicket == ticket)
             {
                 return;
@@ -91,9 +95,11 @@ void QRCodeForScreen::LoginOfficial()
                     mtx.unlock();
                     return;
                 }
-                if (ScanQRLogin(scanUrl.data(), ticket, gameType))
+                const std::string passportQrUrl = PandaScanQRCode(scanUrl, ticket, gameType);
+                if (!passportQrUrl.empty())
                 {
                     lastTicket = ticket;
+                    lastQrCode = passportQrUrl;
                     nlohmann::json config = nlohmann::json::parse(m_config->getConfig());
                     if (config["auto_login"])
                     {
@@ -198,7 +204,8 @@ void QRCodeForScreen::continueLastLogin()
         using enum ServerType;
     case Official:
     {
-        bool b = ConfirmQRLogin(confirmUrl, uid, gameToken, lastTicket, gameType);
+        const bool b = ScanPassportQRLogin(lastQrCode, stoken, mid, uid) &&
+                       ConfirmPassportQRLogin(lastQrCode, stoken, mid, uid);
         if (b)
         {
             Q_EMIT loginResults(ScanRet::SUCCESS);
@@ -224,6 +231,8 @@ void QRCodeForScreen::run()
 {
     ret = ScanRet::UNKNOW;
     m_stop.store(true);
+    lastTicket.clear();
+    lastQrCode.clear();
 #ifndef SHOW
     cv::namedWindow("Video_Stream", cv::WINDOW_AUTOSIZE);
 #endif

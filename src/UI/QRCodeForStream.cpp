@@ -40,11 +40,10 @@ void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string
     this->mid.clear();
 }
 
-void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string_view gameToken,
-                                   const std::string_view stoken, const std::string_view mid)
+void QRCodeForStream::setPassportLoginInfo(const std::string_view uid, const std::string_view stoken,
+                                           const std::string_view mid)
 {
     this->uid = uid;
-    this->gameToken = gameToken;
     this->stoken = stoken;
     this->mid = mid;
 }
@@ -99,18 +98,13 @@ void QRCodeForStream::LoginOfficial()
                 thread_local QRScanner qrScanners;
                 std::string str;
                 qrScanners.decodeSingle(img, str);
-                if (str.size() < 85)
-                {
-                    return;
-                }
-                std::string_view view(str.c_str() + 79, 3);
-                if (!setGameType.contains(view))
-                {
-                    return;
-                }
-                const std::string ticket(str.data() + str.size() - 24, 24);
+
                 std::unique_lock lock(mtx, std::try_to_lock);
                 if (!lock.owns_lock() || !m_stop.load())
+                    return;
+
+                std::string ticket;
+                if (!parseOfficialQRCode(str, ticket))
                     return;
 
                 if (lastTicket == ticket)
@@ -122,12 +116,13 @@ void QRCodeForStream::LoginOfficial()
                 lastAttemptTicket = ticket;
                 lastAttemptAt = now;
 
-                setGameType[view]();
                 const auto config = nlohmann::json::parse(m_config->getConfig(), nullptr, false);
                 const bool continuousScan = !config.is_discarded() && config.value("continuous_scan", false);
-                if (ScanQRLogin(scanUrl.data(), ticket, gameType))
+                const std::string passportQrUrl = PandaScanQRCode(scanUrl, ticket, gameType);
+                if (!passportQrUrl.empty())
                 {
                     lastTicket = ticket;
+                    lastQrCode = passportQrUrl;
                     if ((!config.is_discarded() && config.value("auto_login", false)) || continuousScan)
                     {
                         continueLastLogin();
@@ -329,17 +324,8 @@ void QRCodeForStream::continueLastLogin()
         using enum ServerType;
     case Official:
     {
-        if (!stoken.empty() && !mid.empty())
-        {
-            auto [code, refreshedGameToken] = GetGameTokenByStoken(stoken, mid);
-            if (code != 0 || refreshedGameToken.empty())
-            {
-                Q_EMIT loginResults(ScanRet::FAILURE_2);
-                break;
-            }
-            gameToken = std::move(refreshedGameToken);
-        }
-        bool b = ConfirmQRLogin(confirmUrl, uid, gameToken, lastTicket, gameType);
+        const bool b = ScanPassportQRLogin(lastQrCode, stoken, mid, uid) &&
+                       ConfirmPassportQRLogin(lastQrCode, stoken, mid, uid);
         if (b)
         {
             Q_EMIT loginResults(ScanRet::SUCCESS);
@@ -367,6 +353,7 @@ void QRCodeForStream::run()
     m_stop.store(true);
     ret = ScanRet::UNKNOW;
     lastTicket.clear();
+    lastQrCode.clear();
     lastAttemptTicket.clear();
     lastAttemptAt = {};
     //TODO 获取直播流地址放在这里

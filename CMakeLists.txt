@@ -92,6 +92,7 @@ add_executable(${PROJECT_NAME}
 	"${CMAKE_SOURCE_DIR}/src/Core/CookieParser.hpp"
 	"${CMAKE_SOURCE_DIR}/src/Core/CreateUUID.hpp"
 	"${CMAKE_SOURCE_DIR}/src/Core/ScannerBase.hpp"
+	"${CMAKE_SOURCE_DIR}/src/Core/UrlQuery.hpp"
 	"${CMAKE_SOURCE_DIR}/src/Core/compile_string.hpp"
 	"${CMAKE_SOURCE_DIR}/src/Core/ApiDefs.hpp"
 )

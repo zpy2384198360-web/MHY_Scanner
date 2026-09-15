@@ -38,8 +38,8 @@ WindowMain::WindowMain(QWidget* parent) :
         ui.pBtstartScreen->setText("监视屏幕中");
         ui.pBtstartScreen->setEnabled(true);
     });
-    connect(this, &WindowMain::AccountError, this, [&]() {
-        failure();
+    connect(this, &WindowMain::AccountError, this, [&](const QString& detail) {
+        failure(detail);
         pBtStop();
     });
     connect(this, &WindowMain::StartScanLive, this, [&]() {
@@ -167,10 +167,22 @@ void WindowMain::AddAccount()
     }
     windowLogin = new WindowLogin(this);
     connect(windowLogin, &WindowLogin::AddUserInfo, this, [this](const std::string name, const std::string token, const std::string uid, const std::string mid, const std::string type) {
-        if (checkDuplicates(uid.data()))
+        for (int i = 0; i < userinfo.value("num", 0); ++i)
         {
-            QMessageBox::information(this, "提示", "该账号已添加，无需重复添加", QMessageBox::Yes);
-            return;
+            if (userinfo["account"][i].value("uid", std::string{}) == uid)
+            {
+                userinfo["account"][i]["access_key"] = token;
+                userinfo["account"][i]["name"] = name;
+                userinfo["account"][i]["type"] = type;
+                userinfo["account"][i]["mid"] = mid;
+                if (auto* nameItem = ui.tableWidget->item(i, 2))
+                    nameItem->setText(QString::fromStdString(name));
+                if (auto* typeItem = ui.tableWidget->item(i, 3))
+                    typeItem->setText(QString::fromStdString(type));
+                m_config->updateConfig(userinfo.dump());
+                QMessageBox::information(this, "提示", "账号登录凭证已更新", QMessageBox::Yes);
+                return;
+            }
         }
         //TODO 有预期外信号触发,潜在bug
         insertTableItems(QString::fromStdString(uid), QString::fromStdString(name), QString::fromStdString(type), "");
@@ -211,14 +223,13 @@ void WindowMain::pBtstartScreen(bool clicked)
             std::string stoken = userinfo["account"][countA]["access_key"];
             std::string uid = userinfo["account"][countA]["uid"];
             std::string mid = userinfo["account"][countA]["mid"];
-            auto [code, game_token] = GetGameTokenByStoken(stoken, mid);
-            if (code != 0)
+            if (stoken.empty() || uid.empty() || mid.empty())
             {
-                emit AccountError();
+                emit AccountError("账号凭证缺少 SToken、UID 或 MID");
                 return;
             }
             t1.setServerType(ServerType::Official);
-            t1.setLoginInfo(uid, game_token);
+            t1.setPassportLoginInfo(uid, stoken, mid);
         }
         else if (type == "崩坏3B服")
         {
@@ -228,7 +239,7 @@ void WindowMain::pBtstartScreen(bool clicked)
             auto result{ BSGameSDK::BH3::GetUserInfo(uid, stoken) };
             if (result.code != 0)
             {
-                emit AccountError();
+                emit AccountError(QString("B服账号校验失败（错误码 %1）").arg(result.code));
                 return;
             }
             t1.setServerType(ServerType::BH3_BiliBili);
@@ -274,14 +285,13 @@ void WindowMain::pBtStream(bool clicked)
             std::string stoken = userinfo["account"][countA]["access_key"];
             std::string uid = userinfo["account"][countA]["uid"];
             std::string mid = userinfo["account"][countA]["mid"];
-            auto [code, game_token] = GetGameTokenByStoken(stoken, mid);
-            if (code != 0)
+            if (stoken.empty() || uid.empty() || mid.empty())
             {
-                emit AccountError();
+                emit AccountError("账号凭证缺少 SToken、UID 或 MID");
                 return;
             }
             t2.setServerType(ServerType::Official);
-            t2.setLoginInfo(uid, game_token, stoken, mid);
+            t2.setPassportLoginInfo(uid, stoken, mid);
         }
         else if (type == "崩坏3B服")
         {
@@ -291,7 +301,7 @@ void WindowMain::pBtStream(bool clicked)
             auto result{ BSGameSDK::BH3::GetUserInfo(uid, stoken) };
             if (result.code != 0)
             {
-                emit AccountError();
+                emit AccountError(QString("B服账号校验失败（错误码 %1）").arg(result.code));
                 return;
             }
             t2.setServerType(ServerType::BH3_BiliBili);
@@ -547,11 +557,11 @@ void WindowMain::SetWindowToFront() const
     SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
 }
 
-void WindowMain::failure()
+void WindowMain::failure(const QString& detail)
 {
     QMessageBox* messageBox = new QMessageBox(this);
     messageBox->setAttribute(Qt::WA_DeleteOnClose);
-    messageBox->setText("登录状态失效，\n请重新添加账号！");
+    messageBox->setText("登录状态校验失败。\n" + detail + "\n请重新登录或把错误码告诉我。");
     messageBox->setWindowTitle("提示");
     messageBox->setIcon(QMessageBox::Information);
     messageBox->show();

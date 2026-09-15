@@ -70,14 +70,14 @@ public Q_SLOTS:
     void updateNote(QTableWidgetItem* item);
 Q_SIGNALS:
     void StopScanner();
-    void AccountError();
+    void AccountError(const QString& detail);
     void LiveStreamLinkError(LiveStreamStatus status);
     void AccountNotSelected();
     void StartScanScreen();
     void StartScanLive();
 
 private:
-    void failure();
+    void failure(const QString& detail);
     int countA = -1;
     Ui::WindowMain ui;
     ConfigDate* m_config = &ConfigDate::getInstance();

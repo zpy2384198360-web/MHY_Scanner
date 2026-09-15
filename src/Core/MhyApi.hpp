@@ -17,8 +17,10 @@
 #include "CryptoKit.h"
 #include "UtilString.hpp"
 #include "TimeStamp.hpp"
+#include "UrlQuery.hpp"
 
 static const std::string device_id{ CreateUUID::CreateUUID4() };
+static const std::string device_fp{ Md5(device_id).substr(0, 13) };
 static std::string loginQrcodeTicket{};
 
 [[nodiscard]] inline std::string DataSignAlgorithmVersionGen1()
@@ -68,12 +70,13 @@ inline cpr::Header GetRequestHeader()
     return headers;
 }
 
-inline cpr::Header GetPassportQRCodeHeader()
+inline cpr::Header GetPassportQRCodeHeader(const std::string_view appId = "dw9y09jqjpxc")
 {
     return cpr::Header{
         { "Content-Type", "application/json" },
-        { "x-rpc-app_id", "dw9y09jqjpxc" },
-        { "x-rpc-device_id", device_id }
+        { "x-rpc-app_id", std::string(appId) },
+        { "x-rpc-device_id", device_id },
+        { "x-rpc-device_fp", device_fp }
     };
 }
 
@@ -142,10 +145,20 @@ inline std::tuple<LoginQRCodeState, std::string, std::string, std::string> GetQR
             !payload["tokens"].is_array() || payload["tokens"].empty())
             return { LoginQRCodeState::Expired, {}, {}, {} };
 
+        const nlohmann::json* token = &payload["tokens"][0];
+        for (const auto& candidate : payload["tokens"])
+        {
+            const std::string name = candidate.value("name", std::string{});
+            if (name == "stoken" || name == "stoken_v2")
+            {
+                token = &candidate;
+                break;
+            }
+        }
         return { LoginQRCodeState::Confirmed,
                  payload["user_info"].value("aid", std::string{}),
                  payload["user_info"].value("mid", std::string{}),
-                 payload["tokens"][0].value("token", std::string{}) };
+                 token->value("token", std::string{}) };
     }
     catch (const nlohmann::json::exception&)
     {
@@ -363,32 +376,87 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
     return result;
 }
 
-inline bool ScanQRLogin(const std::string_view url, const std::string_view ticket, GameType gameType)
+inline std::string PandaScanQRCode(const std::string_view url, const std::string_view ticket, GameType gameType)
 {
     if (url.empty() || ticket.empty())
-        return false;
+        return {};
 
     const auto response = cpr::Post(
         cpr::Url{ url },
         cpr::Body{ nlohmann::json{
+            { "passport_app_id", "bll8iq97cem8" },
             { "app_id", static_cast<int>(gameType) },
             { "device", device_id },
-            { "ticket", ticket } }
+            { "ticket", std::string(ticket) },
+            { "ts", GetUnixTimeStampSeconds() } }
                        .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
+        GetPassportQRCodeHeader("bll8iq97cem8"));
+
+    if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
+        return {};
+
+    const auto j = nlohmann::json::parse(response.text, nullptr, false);
+    if (j.is_discarded() || j.value("retcode", -1) != 0 || !j.contains("data"))
+        return {};
+    return j["data"].value("passport_qr_url", std::string{});
+}
+
+inline bool PassportQRCodeLogin(
+    const std::string_view qrCode,
+    const std::string_view stoken,
+    const std::string_view mid,
+    const std::string_view uid,
+    const bool confirm)
+{
+    const std::string ticket = GetUrlQueryParam(qrCode, "tk");
+    const std::string tokenType = GetUrlQueryParam(qrCode, "token_types");
+    if (ticket.empty() || tokenType.empty() || stoken.empty() || mid.empty() || uid.empty())
+        return false;
+
+    auto headers = GetPassportQRCodeHeader("bll8iq97cem8");
+    headers["Cookie"] = "stoken=" + std::string(stoken) +
+                        "; stuid=" + std::string(uid) +
+                        "; mid=" + std::string(mid);
+    const std::string endpoint = confirm
+                                     ? static_cast<std::string>(api::mhy::passport::confirm_qr_login)
+                                     : static_cast<std::string>(api::mhy::passport::scan_qr_login);
+    const auto response = cpr::Post(
+        cpr::Url{ endpoint },
+        cpr::Body{ nlohmann::json{
+            { "ticket", ticket },
+            { "token_types", nlohmann::json::array({ tokenType }) } }
+                       .dump() },
+        headers);
 
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return false;
 
-    try
-    {
-        const auto j = nlohmann::json::parse(response.text);
-        return j.value("retcode", -1) == 0;
-    }
-    catch (const nlohmann::json::exception&)
-    {
-        return false;
-    }
+    const auto j = nlohmann::json::parse(response.text, nullptr, false);
+    return !j.is_discarded() && j.value("retcode", -1) == 0;
+}
+
+inline bool ScanPassportQRLogin(
+    const std::string_view qrCode,
+    const std::string_view stoken,
+    const std::string_view mid,
+    const std::string_view uid)
+{
+    return PassportQRCodeLogin(qrCode, stoken, mid, uid, false);
+}
+
+inline bool ConfirmPassportQRLogin(
+    const std::string_view qrCode,
+    const std::string_view stoken,
+    const std::string_view mid,
+    const std::string_view uid)
+{
+    return PassportQRCodeLogin(qrCode, stoken, mid, uid, true);
+}
+
+// Legacy helpers retained for BBS/game integrations that still use game_token.
+inline bool ScanQRLogin(const std::string_view url, const std::string_view ticket, GameType gameType)
+{
+    return !PandaScanQRCode(url, ticket, gameType).empty();
 }
 
 inline bool ConfirmQRLogin(const std::string_view url, const std::string_view uid, const std::string_view gameToken, const std::string_view ticket, GameType gameType)
@@ -409,15 +477,8 @@ inline bool ConfirmQRLogin(const std::string_view url, const std::string_view ui
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return false;
 
-    try
-    {
-        const auto j = nlohmann::json::parse(response.text);
-        return j.value("retcode", -1) == 0;
-    }
-    catch (const nlohmann::json::exception&)
-    {
-        return false;
-    }
+    const auto j = nlohmann::json::parse(response.text, nullptr, false);
+    return !j.is_discarded() && j.value("retcode", -1) == 0;
 }
 
 inline std::string makeSign(const nlohmann::json& data)

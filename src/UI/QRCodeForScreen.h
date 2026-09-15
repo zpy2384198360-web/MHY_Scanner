@@ -22,6 +22,7 @@ public:
 
     void setLoginInfo(const std::string& uid, const std::string& token);
     void setLoginInfo(const std::string& uid, const std::string& token, const std::string& name);
+    void setPassportLoginInfo(const std::string& uid, const std::string& stoken, const std::string& mid);
     void setServerType(const ServerType servertype);
     void continueLastLogin();
     void run();
@@ -37,6 +38,8 @@ private:
     void LoginBH3BiliBili();
     std::atomic<bool> m_stop;
     std::string m_name;
+    std::string stoken;
+    std::string mid;
     GameType m_gametype{ GameType::UNKNOW };
     ServerType servertype{};
     ScanRet ret{ ScanRet::UNKNOW };
