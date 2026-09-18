@@ -2,13 +2,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <mutex>
+#include <string>
 #include <string_view>
 
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/time.h>
 #include <libswscale/swscale.h>
@@ -41,6 +44,7 @@ public:
     void setAutoLogin(bool enabled);
     void setContinuousScan(bool enabled);
     [[nodiscard]] bool isContinuousScan() const;
+    [[nodiscard]] std::string lastInitError();
     void setUrl(const std::string& url, const std::map<std::string, std::string> heard = {});
     auto init() -> bool;
     void run();
@@ -56,7 +60,10 @@ private:
     void LoginOfficial();
     void LoginBH3BiliBili();
     void setStreamHW();
+    void setInitError(const std::string& stage, int errorCode = 0);
     std::string streamUrl{};
+    std::map<std::string, std::string> streamHeaders;
+    std::string m_lastInitError;
     std::string m_name;
     std::string stoken;
     std::string mid;

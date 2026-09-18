@@ -1,7 +1,9 @@
 ﻿#include "QRCodeForStream.h"
 
+#include <array>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "QRScanner.h"
 #include "MhyApi.hpp"
@@ -74,6 +76,28 @@ void QRCodeForStream::setContinuousScan(const bool enabled)
 bool QRCodeForStream::isContinuousScan() const
 {
     return m_continuousScan.load();
+}
+
+std::string QRCodeForStream::lastInitError()
+{
+    const std::scoped_lock lock(mtx);
+    return m_lastInitError;
+}
+
+void QRCodeForStream::setInitError(const std::string& stage, const int errorCode)
+{
+    std::string detail = stage;
+    if (errorCode < 0)
+    {
+        std::array<char, AV_ERROR_MAX_STRING_SIZE> errorText{};
+        if (av_strerror(errorCode, errorText.data(), errorText.size()) == 0)
+        {
+            detail += "（" + std::string(errorText.data()) + "）";
+        }
+        detail += "，错误码 " + std::to_string(errorCode);
+    }
+    const std::scoped_lock lock(mtx);
+    m_lastInitError = std::move(detail);
 }
 
 void QRCodeForStream::LoginOfficial()
@@ -267,41 +291,91 @@ void QRCodeForStream::stop()
 void QRCodeForStream::setUrl(const std::string& url, const std::map<std::string, std::string> heard)
 {
     streamUrl = url;
-    for (const auto& it : heard)
-    {
-        av_dict_set(&pAvdictionary, it.first.c_str(), it.second.c_str(), 0);
-    }
-    av_dict_set(&pAvdictionary, "max_delay", "0", 0);
-    av_dict_set(&pAvdictionary, "probesize", "1024", 0);
-    av_dict_set(&pAvdictionary, "packetsize", "128", 0);
-    av_dict_set(&pAvdictionary, "rtbufsize", "0", 0);
-    av_dict_set(&pAvdictionary, "delay", "0", 0);
-    av_dict_set(&pAvdictionary, "buffer_size", "1000", 0);
-    av_dict_set(&pAvdictionary, "fflags", "nobuffer", 0);
-    av_dict_set(&pAvdictionary, "flags", "low_delay", 0);
-    av_dict_set(&pAvdictionary, "avioflags", "direct", 0);
-    av_dict_set(&pAvdictionary, "analyzeduration", "0", 0);
+    streamHeaders = heard;
 }
 
 auto QRCodeForStream::init() -> bool
 {
-    pAVFormatContext = avformat_alloc_context();
-    if (pAVFormatContext == nullptr)
+    // Some CDNs do not include codec metadata in the first few packets. Try a
+    // low-latency profile first, then reopen with a larger probe window.
+    bool streamReady = false;
+    for (int attempt = 0; attempt < 2; ++attempt)
     {
-        std::cerr << "Error allocating format context" << std::endl;
+        if (pAVFormatContext != nullptr)
+        {
+            avformat_close_input(&pAVFormatContext);
+        }
+        av_dict_free(&pAvdictionary);
+
+        for (const auto& [key, value] : streamHeaders)
+        {
+            av_dict_set(&pAvdictionary, key.c_str(), value.c_str(), 0);
+        }
+        av_dict_set(&pAvdictionary, "rw_timeout", "8000000", 0);
+        av_dict_set(&pAvdictionary, "reconnect", "1", 0);
+        av_dict_set(&pAvdictionary, "reconnect_streamed", "1", 0);
+        av_dict_set(&pAvdictionary, "reconnect_delay_max", "2", 0);
+
+        if (attempt == 0)
+        {
+            av_dict_set(&pAvdictionary, "max_delay", "0", 0);
+            av_dict_set(&pAvdictionary, "probesize", "32768", 0);
+            av_dict_set(&pAvdictionary, "analyzeduration", "500000", 0);
+            av_dict_set(&pAvdictionary, "buffer_size", "65536", 0);
+            av_dict_set(&pAvdictionary, "fflags", "nobuffer", 0);
+            av_dict_set(&pAvdictionary, "flags", "low_delay", 0);
+        }
+        else
+        {
+            av_dict_set(&pAvdictionary, "probesize", "1048576", 0);
+            av_dict_set(&pAvdictionary, "analyzeduration", "2000000", 0);
+            av_dict_set(&pAvdictionary, "buffer_size", "262144", 0);
+        }
+
+        pAVFormatContext = avformat_alloc_context();
+        if (pAVFormatContext == nullptr)
+        {
+            setInitError("无法分配直播流解析器");
+            return false;
+        }
+        if (attempt == 0)
+        {
+            pAVFormatContext->flags |= AVFMT_FLAG_NOBUFFER;
+        }
+
+        const int openResult =
+            avformat_open_input(&pAVFormatContext, streamUrl.c_str(), nullptr, &pAvdictionary);
+        if (openResult < 0)
+        {
+            setInitError(attempt == 0 ? "无法连接直播流，正在尝试兼容模式" : "无法连接直播流",
+                         openResult);
+            continue;
+        }
+
+        const int infoResult = avformat_find_stream_info(pAVFormatContext, nullptr);
+        if (infoResult < 0)
+        {
+            setInitError(attempt == 0 ? "无法解析直播流，正在尝试兼容模式" : "无法解析直播流",
+                         infoResult);
+            continue;
+        }
+        streamReady = true;
+        break;
+    }
+
+    if (!streamReady)
+    {
         return false;
     }
-    pAVFormatContext->flags |= AVFMT_FLAG_NOBUFFER;
-    if (avformat_open_input(&pAVFormatContext, streamUrl.c_str(), NULL, &pAvdictionary) != 0)
+    if (pAVFormatContext == nullptr || pAVFormatContext->nb_streams == 0)
     {
-        std::cerr << "Error opening input file" << std::endl;
+        if (lastInitError().empty())
+        {
+            setInitError("直播流中没有可解析的数据");
+        }
         return false;
     }
-    if (avformat_find_stream_info(pAVFormatContext, NULL) < 0)
-    {
-        std::cerr << "Error finding stream information" << std::endl;
-        return false;
-    }
+
     AVStream* videoStream = nullptr;
     for (int i = 0; i < pAVFormatContext->nb_streams; i++)
     {
@@ -313,35 +387,46 @@ auto QRCodeForStream::init() -> bool
     }
     if (videoStream == nullptr)
     {
-        std::cerr << "No video stream found" << std::endl;
+        setInitError("直播地址已连接，但没有检测到视频画面");
         return false;
     }
     videoStreamIndex = videoStream->index;
     const AVCodec* decoder{ avcodec_find_decoder(videoStream->codecpar->codec_id) };
     if (decoder == nullptr)
     {
-        std::cerr << "Codec not found" << std::endl;
+        setInitError("当前版本不支持该直播视频编码");
         return false;
     }
     pAVCodecContext = avcodec_alloc_context3(decoder);
     if (pAVCodecContext == nullptr)
     {
-        std::cerr << "Error allocating codec context" << std::endl;
+        setInitError("无法分配视频解码器");
         return false;
     }
-    avcodec_parameters_to_context(pAVCodecContext, videoStream->codecpar);
-    pAVCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    if (avcodec_open2(pAVCodecContext, decoder, NULL) < 0)
+    const int parametersResult = avcodec_parameters_to_context(pAVCodecContext, videoStream->codecpar);
+    if (parametersResult < 0)
     {
-        std::cerr << "Error opening codec" << std::endl;
+        setInitError("无法读取视频编码参数", parametersResult);
+        return false;
+    }
+    pAVCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    const int decoderResult = avcodec_open2(pAVCodecContext, decoder, nullptr);
+    if (decoderResult < 0)
+    {
+        setInitError("无法启动视频解码器", decoderResult);
         return false;
     }
     setStreamHW();
     pSwsContext = sws_getContext(
         pAVCodecContext->width, pAVCodecContext->height, pAVCodecContext->pix_fmt,
-        videoStreamWidth, videoStreamHeight, AV_PIX_FMT_BGR24, SWS_BILINEAR, NULL, NULL, NULL);
+        videoStreamWidth, videoStreamHeight, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
     pAVPacket = av_packet_alloc();
     pAVFrame = av_frame_alloc();
+    if (pSwsContext == nullptr || pAVPacket == nullptr || pAVFrame == nullptr)
+    {
+        setInitError("无法分配视频画面转换缓冲区");
+        return false;
+    }
     return true;
 }
 
@@ -384,6 +469,10 @@ void QRCodeForStream::run()
     lastQrCode.clear();
     lastAttemptTicket.clear();
     lastAttemptAt = {};
+    {
+        const std::scoped_lock lock(mtx);
+        m_lastInitError.clear();
+    }
     //TODO 获取直播流地址放在这里
     if (init())
     {

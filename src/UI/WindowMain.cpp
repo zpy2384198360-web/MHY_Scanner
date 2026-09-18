@@ -364,7 +364,11 @@ void WindowMain::islogin(const ScanRet ret)
         Show_QMessageBox("提示", "直播中断!");
         break;
     case ScanRet::STREAMERROR:
-        Show_QMessageBox("提示", "直播流初始化失败!");
+    {
+        const QString detail = QString::fromStdString(t2.lastInitError());
+        Show_QMessageBox("提示", detail.isEmpty() ? "直播流初始化失败!"
+                                                   : QString("直播流初始化失败：\n") + detail);
+    }
         break;
     case ScanRet::SUCCESS:
         Show_QMessageBox("提示", "扫码成功!");
@@ -544,6 +548,17 @@ bool WindowMain::GetStreamLink(
     if (info.status == LiveStreamStatus::Normal)
     {
         url = info.link;
+        heards["user_agent"] =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
+        if (platform == LivePlatform::Douyin)
+        {
+            heards["referer"] = "https://live.douyin.com/" + roomid;
+        }
+        else if (platform == LivePlatform::BiliBili)
+        {
+            heards["referer"] = "https://live.bilibili.com/" + roomid;
+        }
         return true;
     }
     else
