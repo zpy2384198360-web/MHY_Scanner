@@ -338,7 +338,7 @@ std::string SelectLowestLatencyStream(
         }));
     }
 
-    ProbeResult fastest{ links.front(), std::numeric_limits<long long>::max(), false };
+    ProbeResult fastest{ links.front(), (std::numeric_limits<long long>::max)(), false };
     for (auto& probe : probes)
     {
         const ProbeResult result = probe.get();

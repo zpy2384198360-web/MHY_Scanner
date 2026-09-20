@@ -324,9 +324,9 @@ void QRCodeForStream::setStreamHW()
     const bool portrait = sourceHeight > sourceWidth;
     const double widthScale = static_cast<double>(portrait ? 720 : 1280) / sourceWidth;
     const double heightScale = static_cast<double>(portrait ? 1280 : 720) / sourceHeight;
-    const double scale = std::min({ 1.0, widthScale, heightScale });
-    videoStreamWidth = std::max(1, static_cast<int>(sourceWidth * scale));
-    videoStreamHeight = std::max(1, static_cast<int>(sourceHeight * scale));
+    const double scale = (std::min)({ 1.0, widthScale, heightScale });
+    videoStreamWidth = (std::max)(1, static_cast<int>(sourceWidth * scale));
+    videoStreamHeight = (std::max)(1, static_cast<int>(sourceHeight * scale));
 }
 
 void QRCodeForStream::stop()

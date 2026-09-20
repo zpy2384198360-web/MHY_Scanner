@@ -96,6 +96,10 @@ add_executable(${PROJECT_NAME}
 	"${CMAKE_SOURCE_DIR}/src/Core/ApiDefs.hpp"
 )
 
+if(WIN32)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE NOMINMAX)
+endif()
+
 if(NOT DEV)
 	#target_link_options(${PROJECT_NAME} PRIVATE "/SUBSYSTEM:WINDOWS")
 	set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
