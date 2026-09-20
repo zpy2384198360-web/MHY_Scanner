@@ -1,8 +1,5 @@
 ﻿#include "QRCodeForScreen.h"
 
-#include <chrono>
-#include <thread>
-
 #include <QFuture>
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
@@ -10,8 +7,6 @@
 #include "QRScanner.h"
 #include "ScreenScan.h"
 #include "ScreenShotDXGI.hpp"
-
-#define DELAYED 200
 
 QRCodeForScreen::QRCodeForScreen(QObject* parent) :
     QThread(parent),
@@ -62,16 +57,25 @@ void QRCodeForScreen::LoginOfficial()
     ScreenShotDXGI screenshotdxgi;
     int w{ 0 };
     int h{ 0 };
-    screenshotdxgi.InitDevice();
-    screenshotdxgi.InitDupl(0, w, h);
+    if (!screenshotdxgi.InitDevice() || !screenshotdxgi.InitDupl(0, w, h))
+        return;
     long mBufferSize = w * h * 4;
     uint8_t* mBuffer = new UCHAR[mBufferSize];
     while (m_stop.load())
     {
-        screenshotdxgi.getFrame(100);
-        screenshotdxgi.copyFrameToBuffer(&mBuffer, mBufferSize);
+        const int frameResult = screenshotdxgi.getFrame(50);
+        if (frameResult == 2)
+            continue;
+        if (frameResult != 0)
+            break;
+        if (!screenshotdxgi.copyFrameToBuffer(&mBuffer, mBufferSize))
+        {
+            screenshotdxgi.doneWithFrame();
+            continue;
+        }
         cv::Mat img;
         cv::resize(cv::Mat(h, w, CV_8UC4, mBuffer), img, { 1280, 720 });
+        screenshotdxgi.doneWithFrame();
 #ifndef SHOW
         cv::imshow("Video_Stream", img);
         cv::waitKey(1);
@@ -118,9 +122,8 @@ void QRCodeForScreen::LoginOfficial()
                 mtx.unlock();
             }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(DELAYED));
-        screenshotdxgi.doneWithFrame();
     }
+    threadPool.waitForDone();
     delete[] mBuffer;
 }
 
@@ -132,16 +135,25 @@ void QRCodeForScreen::LoginBH3BiliBili()
     ScreenShotDXGI screenshotdxgi;
     int w{ 0 };
     int h{ 0 };
-    screenshotdxgi.InitDevice();
-    screenshotdxgi.InitDupl(0, w, h);
+    if (!screenshotdxgi.InitDevice() || !screenshotdxgi.InitDupl(0, w, h))
+        return;
     long mBufferSize = w * h * 4;
     uint8_t* mBuffer = new UCHAR[mBufferSize];
     while (m_stop.load())
     {
-        screenshotdxgi.getFrame(100);
-        screenshotdxgi.copyFrameToBuffer(&mBuffer, mBufferSize);
+        const int frameResult = screenshotdxgi.getFrame(50);
+        if (frameResult == 2)
+            continue;
+        if (frameResult != 0)
+            break;
+        if (!screenshotdxgi.copyFrameToBuffer(&mBuffer, mBufferSize))
+        {
+            screenshotdxgi.doneWithFrame();
+            continue;
+        }
         cv::Mat img;
         cv::resize(cv::Mat(h, w, CV_8UC4, mBuffer), img, { 1280, 720 });
+        screenshotdxgi.doneWithFrame();
 #ifndef SHOW
         cv::imshow("Video_Stream", img);
         cv::waitKey(1);
@@ -191,9 +203,8 @@ void QRCodeForScreen::LoginBH3BiliBili()
                 mtx.unlock();
             }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(DELAYED));
-        screenshotdxgi.doneWithFrame();
     }
+    threadPool.waitForDone();
     delete[] mBuffer;
 }
 

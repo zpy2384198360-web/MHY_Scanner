@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 #include <memory>
 
@@ -29,6 +30,7 @@ struct LiveStreamInfo
 {
     LiveStreamStatus status;
     std::string link;
+    std::vector<std::string> links{};
 };
 
 class LiveBili
@@ -38,8 +40,8 @@ public:
     LiveStreamInfo GetLiveStreamInfo();
 
 private:
-    std::string GetLinkByRealRoomID(const std::string& realRoomID);
-    std::string GetStreamUrl(const cpr::Parameters param);
+    std::vector<std::string> GetLinkByRealRoomID(const std::string& realRoomID);
+    std::vector<std::string> GetStreamUrls(const cpr::Parameters param);
 
     std::string roomID;
     std::string realRoomID;
@@ -52,7 +54,7 @@ public:
     LiveStreamInfo GetLiveStreamInfo();
 
 private:
-    std::string GetStreamLinkFromResponse(const nlohmann::json& data);
+    std::vector<std::string> GetStreamLinksFromResponse(const nlohmann::json& data);
     std::string m_roomID;
 };
 
@@ -63,3 +65,7 @@ LiveStreamInfo GetLiveInfo(const std::string& roomID)
 }
 
 LiveStreamInfo GetLiveInfo(const LivePlatform platform, const std::string& roomID);
+std::string SelectLowestLatencyStream(
+    const std::vector<std::string>& links,
+    const std::string& userAgent,
+    const std::string& referer);

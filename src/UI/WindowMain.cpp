@@ -559,7 +559,6 @@ bool WindowMain::GetStreamLink(
     auto info = GetLiveInfo(platform, roomid);
     if (info.status == LiveStreamStatus::Normal)
     {
-        url = info.link;
         heards["user_agent"] =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
@@ -571,6 +570,9 @@ bool WindowMain::GetStreamLink(
         {
             heards["referer"] = "https://live.bilibili.com/" + roomid;
         }
+        url = SelectLowestLatencyStream(info.links, heards["user_agent"], heards["referer"]);
+        if (url.empty())
+            url = info.link;
         return true;
     }
     else
