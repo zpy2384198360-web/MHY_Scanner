@@ -1,5 +1,6 @@
 ﻿#include "QRCodeForStream.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@ QRCodeForStream::QRCodeForStream(QObject* parent) :
 
 {
     av_log_set_level(AV_LOG_FATAL);
+    m_gameQrSession = std::make_unique<cpr::Session>();
 }
 
 QRCodeForStream::~QRCodeForStream()
@@ -42,11 +44,12 @@ void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string
 }
 
 void QRCodeForStream::setPassportLoginInfo(const std::string_view uid, const std::string_view stoken,
-                                           const std::string_view mid)
+                                           const std::string_view mid, const std::string_view gameToken)
 {
     this->uid = uid;
     this->stoken = stoken;
     this->mid = mid;
+    this->gameToken = gameToken;
 }
 
 void QRCodeForStream::setLoginInfo(const std::string_view uid, const std::string_view gameToken, const std::string& name)
@@ -82,6 +85,31 @@ std::string QRCodeForStream::lastInitError()
 {
     const std::scoped_lock lock(mtx);
     return m_lastInitError;
+}
+
+std::string QRCodeForStream::lastLatencySummary()
+{
+    const std::scoped_lock lock(timingMtx);
+    return m_lastLatencySummary;
+}
+
+void QRCodeForStream::recordClaimTiming(const long long decodeMs, const long long claimMs)
+{
+    const std::scoped_lock lock(timingMtx);
+    m_attemptDecodeMs = decodeMs;
+    m_attemptClaimMs = claimMs;
+    m_lastLatencySummary = "识别 " + std::to_string(decodeMs) + "ms，抢码接口 " +
+                           std::to_string(claimMs) + "ms";
+}
+
+void QRCodeForStream::finishTiming(const long long confirmMs, const std::string& mode)
+{
+    const std::scoped_lock lock(timingMtx);
+    const long long totalMs = m_attemptDecodeMs + m_attemptClaimMs + confirmMs;
+    m_lastLatencySummary = "识别 " + std::to_string(m_attemptDecodeMs) + "ms，抢码接口 " +
+                           std::to_string(m_attemptClaimMs) + "ms，确认 " +
+                           std::to_string(confirmMs) + "ms，总计 " + std::to_string(totalMs) +
+                           "ms（" + mode + "）";
 }
 
 void QRCodeForStream::setInitError(const std::string& stage, const int errorCode)
@@ -135,7 +163,9 @@ void QRCodeForStream::LoginOfficial()
             threadPool.tryStart([&, img = std::move(img)]() {
                 thread_local QRScanner qrScanners;
                 std::string str;
+                const auto decodeStarted = std::chrono::steady_clock::now();
                 qrScanners.decodeSingle(img, str);
+                const auto decodedAt = std::chrono::steady_clock::now();
 
                 std::unique_lock lock(mtx, std::try_to_lock);
                 if (!lock.owns_lock() || !m_stop.load())
@@ -155,7 +185,13 @@ void QRCodeForStream::LoginOfficial()
                 lastAttemptAt = now;
 
                 const bool continuousScan = m_continuousScan.load();
-                const std::string passportQrUrl = PandaScanQRCode(scanUrl, ticket, gameType);
+                const auto claimStarted = std::chrono::steady_clock::now();
+                const std::string passportQrUrl =
+                    PandaScanQRCode(*m_gameQrSession, scanUrl, ticket, gameType);
+                const auto claimFinished = std::chrono::steady_clock::now();
+                recordClaimTiming(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(decodedAt - decodeStarted).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(claimFinished - claimStarted).count());
                 if (!passportQrUrl.empty())
                 {
                     lastTicket = ticket;
@@ -218,7 +254,9 @@ void QRCodeForStream::LoginBH3BiliBili()
             threadPool.tryStart([&, img = std::move(img)]() {
                 thread_local QRScanner qrScanners;
                 std::string str;
+                const auto decodeStarted = std::chrono::steady_clock::now();
                 qrScanners.decodeSingle(img, str);
+                const auto decodedAt = std::chrono::steady_clock::now();
                 if (str.size() < 85)
                 {
                     return;
@@ -242,7 +280,13 @@ void QRCodeForStream::LoginBH3BiliBili()
                 lastAttemptAt = now;
 
                 const bool continuousScan = m_continuousScan.load();
-                if (ret = scanCheck(ticket); ret == ScanRet::SUCCESS)
+                const auto claimStarted = std::chrono::steady_clock::now();
+                ret = scanCheck(ticket);
+                const auto claimFinished = std::chrono::steady_clock::now();
+                recordClaimTiming(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(decodedAt - decodeStarted).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(claimFinished - claimStarted).count());
+                if (ret == ScanRet::SUCCESS)
                 {
                     lastTicket = ticket;
                     if (m_autoLogin.load() || continuousScan)
@@ -269,18 +313,20 @@ void QRCodeForStream::LoginBH3BiliBili()
 
 void QRCodeForStream::setStreamHW()
 {
-    if (pAVCodecContext->width < pAVCodecContext->height ||
-        pAVCodecContext->height == 480 ||
-        pAVCodecContext->height == 720)
+    const int sourceWidth = pAVCodecContext->width;
+    const int sourceHeight = pAVCodecContext->height;
+    if (sourceWidth <= 0 || sourceHeight <= 0)
     {
-        videoStreamWidth = pAVCodecContext->width;
-        videoStreamHeight = pAVCodecContext->height;
+        videoStreamWidth = 1;
+        videoStreamHeight = 1;
+        return;
     }
-    else
-    {
-        videoStreamWidth = pAVCodecContext->width / 1.5;
-        videoStreamHeight = pAVCodecContext->height / 1.5;
-    }
+    const bool portrait = sourceHeight > sourceWidth;
+    const double widthScale = static_cast<double>(portrait ? 720 : 1280) / sourceWidth;
+    const double heightScale = static_cast<double>(portrait ? 1280 : 720) / sourceHeight;
+    const double scale = std::min({ 1.0, widthScale, heightScale });
+    videoStreamWidth = std::max(1, static_cast<int>(sourceWidth * scale));
+    videoStreamHeight = std::max(1, static_cast<int>(sourceHeight * scale));
 }
 
 void QRCodeForStream::stop()
@@ -410,6 +456,16 @@ auto QRCodeForStream::init() -> bool
         return false;
     }
     pAVCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    pAVCodecContext->flags2 |= AV_CODEC_FLAG2_FAST;
+    if ((decoder->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0)
+    {
+        pAVCodecContext->thread_type = FF_THREAD_SLICE;
+    }
+    else
+    {
+        // Frame threading buffers complete frames and increases live latency.
+        pAVCodecContext->thread_count = 1;
+    }
     const int decoderResult = avcodec_open2(pAVCodecContext, decoder, nullptr);
     if (decoderResult < 0)
     {
@@ -432,13 +488,28 @@ auto QRCodeForStream::init() -> bool
 
 void QRCodeForStream::continueLastLogin()
 {
+    const auto confirmStarted = std::chrono::steady_clock::now();
     switch (servertype)
     {
         using enum ServerType;
     case Official:
     {
-        const bool b = ScanPassportQRLogin(lastQrCode, stoken, mid, uid) &&
-                       ConfirmPassportQRLogin(lastQrCode, stoken, mid, uid);
+        bool b = false;
+        std::string mode = "兼容确认";
+        if (!gameToken.empty())
+        {
+            b = ConfirmQRLogin(*m_gameQrSession, confirmUrl, uid, gameToken, lastTicket, gameType);
+            mode = b ? "快速确认" : "快速失败后兼容确认";
+        }
+        if (!b)
+        {
+            b = ScanPassportQRLogin(lastQrCode, stoken, mid, uid) &&
+                ConfirmPassportQRLogin(lastQrCode, stoken, mid, uid);
+        }
+        const auto confirmFinished = std::chrono::steady_clock::now();
+        finishTiming(
+            std::chrono::duration_cast<std::chrono::milliseconds>(confirmFinished - confirmStarted).count(),
+            mode);
         if (b)
         {
             Q_EMIT loginResults(ScanRet::SUCCESS);
@@ -452,6 +523,10 @@ void QRCodeForStream::continueLastLogin()
     case BH3_BiliBili:
     {
         ret = scanConfirm(lastTicket, uid, gameToken, m_name);
+        const auto confirmFinished = std::chrono::steady_clock::now();
+        finishTiming(
+            std::chrono::duration_cast<std::chrono::milliseconds>(confirmFinished - confirmStarted).count(),
+            "B服确认");
         Q_EMIT loginResults(ret);
     }
     break;
@@ -463,6 +538,7 @@ void QRCodeForStream::continueLastLogin()
 void QRCodeForStream::run()
 {
     threadPool.setMaxThreadCount(threadNumber);
+    threadPool.setThreadPriority(QThread::HighPriority);
     m_stop.store(true);
     ret = ScanRet::UNKNOW;
     lastTicket.clear();
@@ -472,6 +548,12 @@ void QRCodeForStream::run()
     {
         const std::scoped_lock lock(mtx);
         m_lastInitError.clear();
+    }
+    {
+        const std::scoped_lock lock(timingMtx);
+        m_lastLatencySummary.clear();
+        m_attemptDecodeMs = 0;
+        m_attemptClaimMs = 0;
     }
     //TODO 获取直播流地址放在这里
     if (init())

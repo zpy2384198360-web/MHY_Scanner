@@ -22,9 +22,20 @@ void QRScanner::decodeSingle(const cv::Mat& img, std::string& qrCode)
     auto startTime = std::chrono::high_resolution_clock::now();
 #endif
     const std::vector<std::string>& strDecoded = detector->detectAndDecode(img);
-    if (strDecoded.size() > 0)
+    if (!strDecoded.empty())
     {
         qrCode = strDecoded[0];
+        for (const auto& candidate : strDecoded)
+        {
+            const bool officialCode =
+                candidate.find("ticket=") != std::string::npos || candidate.find("tk=") != std::string::npos;
+            const bool biliCode = candidate.size() >= 85 && candidate.compare(79, 3, "8F3") == 0;
+            if (officialCode || biliCode)
+            {
+                qrCode = candidate;
+                break;
+            }
+        }
     }
 #ifdef TESTSPEED
     auto endTime = std::chrono::high_resolution_clock::now();

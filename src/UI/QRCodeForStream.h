@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -26,6 +27,11 @@ extern "C"
 #include "ApiDefs.hpp"
 #include "ScannerBase.hpp"
 
+namespace cpr
+{
+class Session;
+}
+
 class QRCodeForStream final :
     public QThread,
     public ScannerBase
@@ -38,13 +44,14 @@ public:
 
     void setLoginInfo(const std::string_view uid, const std::string_view gameToken);
     void setPassportLoginInfo(const std::string_view uid, const std::string_view stoken,
-                              const std::string_view mid);
+                              const std::string_view mid, const std::string_view gameToken = {});
     void setLoginInfo(const std::string_view uid, const std::string_view gameToken, const std::string& name);
     void setServerType(const ServerType servertype);
     void setAutoLogin(bool enabled);
     void setContinuousScan(bool enabled);
     [[nodiscard]] bool isContinuousScan() const;
     [[nodiscard]] std::string lastInitError();
+    [[nodiscard]] std::string lastLatencySummary();
     void setUrl(const std::string& url, const std::map<std::string, std::string> heard = {});
     auto init() -> bool;
     void run();
@@ -61,9 +68,15 @@ private:
     void LoginBH3BiliBili();
     void setStreamHW();
     void setInitError(const std::string& stage, int errorCode = 0);
+    void recordClaimTiming(long long decodeMs, long long claimMs);
+    void finishTiming(long long confirmMs, const std::string& mode);
+    std::mutex timingMtx;
     std::string streamUrl{};
     std::map<std::string, std::string> streamHeaders;
     std::string m_lastInitError;
+    std::string m_lastLatencySummary;
+    long long m_attemptDecodeMs{};
+    long long m_attemptClaimMs{};
     std::string m_name;
     std::string stoken;
     std::string mid;
@@ -82,6 +95,7 @@ private:
     int videoStreamHeight{};
     const int threadNumber{ 2 };
     QThreadPool threadPool;
+    std::unique_ptr<cpr::Session> m_gameQrSession;
     std::atomic<bool> m_stop;
     std::atomic<bool> m_autoLogin{ false };
     std::atomic<bool> m_continuousScan{ false };

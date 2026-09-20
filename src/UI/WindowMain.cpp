@@ -294,8 +294,13 @@ void WindowMain::pBtStream(bool clicked)
                 emit AccountError("账号凭证缺少 SToken、UID 或 MID");
                 return;
             }
+            auto [tokenCode, freshGameToken] = GetGameTokenByStoken(stoken, mid);
+            if (tokenCode != 0)
+            {
+                freshGameToken.clear();
+            }
             t2.setServerType(ServerType::Official);
-            t2.setPassportLoginInfo(uid, stoken, mid);
+            t2.setPassportLoginInfo(uid, stoken, mid, freshGameToken);
         }
         else if (type == "崩坏3B服")
         {
@@ -330,10 +335,14 @@ void WindowMain::showEvent(QShowEvent* event)
 
 void WindowMain::islogin(const ScanRet ret)
 {
-    const bool continuousStream = sender() == &t2 && t2.isContinuousScan();
+    const bool streamResult = sender() == &t2;
+    const QString latency = streamResult ? QString::fromStdString(t2.lastLatencySummary()) : QString{};
+    const bool continuousStream = streamResult && t2.isContinuousScan();
     if (continuousStream && ret != ScanRet::LIVESTOP && ret != ScanRet::STREAMERROR)
     {
-        ui.pBtStream->setText(ret == ScanRet::SUCCESS ? "已确认，继续检测" : "未抢到，继续检测");
+        const QString state = ret == ScanRet::SUCCESS ? "已确认，继续检测" : "未抢到，继续检测";
+        ui.pBtStream->setText(latency.isEmpty() ? state : state + "｜" + latency);
+        ui.pBtStream->setToolTip(latency);
         return;
     }
     if (ret == ScanRet::SUCCESS && (bool)userinfo["auto_exit"] == true)
@@ -350,15 +359,18 @@ void WindowMain::islogin(const ScanRet ret)
         messageBox->addButton(QMessageBox::Yes);
         messageBox->show();
     };
+    const auto WithLatency = [&](const QString& text) {
+        return latency.isEmpty() ? text : text + "\n" + latency;
+    };
     switch (ret)
     {
     case ScanRet::UNKNOW:
         break;
     case ScanRet::FAILURE_1:
-        Show_QMessageBox("提示", "二维码已失效或已被其他人抢先！");
+        Show_QMessageBox("提示", WithLatency("二维码已失效或已被其他人抢先！"));
         break;
     case ScanRet::FAILURE_2:
-        Show_QMessageBox("提示", "确认失败，可能已被其他人抢先！");
+        Show_QMessageBox("提示", WithLatency("确认失败，可能已被其他人抢先！"));
         break;
     case ScanRet::LIVESTOP:
         Show_QMessageBox("提示", "直播中断!");
@@ -371,7 +383,7 @@ void WindowMain::islogin(const ScanRet ret)
     }
         break;
     case ScanRet::SUCCESS:
-        Show_QMessageBox("提示", "扫码成功!");
+        Show_QMessageBox("提示", WithLatency("扫码成功!"));
         break;
     default:
         break;
@@ -667,6 +679,7 @@ void WindowMain::pBtStop()
     t2.stop();
     ui.pBtstartScreen->setText("监视屏幕");
     ui.pBtStream->setText("监视直播间");
+    ui.pBtStream->setToolTip({});
     ui.pBtstartScreen->setChecked(false);
     ui.pBtStream->setChecked(false);
     ui.pBtstartScreen->setEnabled(true);

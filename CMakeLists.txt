@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.26)
 project(MHY_Scanner
-	VERSION 1.1.15
+	VERSION 1.1.16
 	LANGUAGES CXX
 )
 
@@ -56,7 +56,6 @@ include_directories(${CMAKE_SOURCE_DIR}/3rdparty/boost)
 #link_directories(./3rdparty/abogus_cpp)
 
 if(NOT DEV)
-	add_definitions(-DTESTSPEED)
 	add_definitions(-DSHOW)
 endif()
 

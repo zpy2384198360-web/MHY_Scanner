@@ -209,7 +209,9 @@ inline std::tuple<int, std::string> GetGameTokenByStoken(
             cpr::Header{
                 { "Accept", "application/json" },
                 { "Cookie", std::string(tokenName) + "=" + std::string(stoken) + "; mid=" + std::string(mid) }
-            });
+            },
+            cpr::ConnectTimeout{ 1500 },
+            cpr::Timeout{ 3000 });
 
         if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
             return { -1, {} };
@@ -246,7 +248,9 @@ inline std::tuple<int, std::string> GetGameTokenByStoken(
         cpr::Url{ api::mhy::takumi::game_token },
         cpr::Parameters{
             { "stoken", std::string(stoken) },
-            { "mid", std::string(mid) } });
+            { "mid", std::string(mid) } },
+        cpr::ConnectTimeout{ 1500 },
+        cpr::Timeout{ 3000 });
 
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return { -1, {} };
@@ -376,12 +380,15 @@ inline auto LoginByMobileCaptcha(const std::string_view actionType, const std::s
     return result;
 }
 
-inline std::string PandaScanQRCode(const std::string_view url, const std::string_view ticket, GameType gameType)
+inline std::string PandaScanQRCode(
+    cpr::Session& session,
+    const std::string_view url,
+    const std::string_view ticket,
+    GameType gameType)
 {
     if (url.empty() || ticket.empty())
         return {};
 
-    thread_local cpr::Session session;
     session.SetUrl(cpr::Url{ url });
     session.SetBody(cpr::Body{ nlohmann::json{
             { "passport_app_id", "bll8iq97cem8" },
@@ -402,6 +409,12 @@ inline std::string PandaScanQRCode(const std::string_view url, const std::string
     if (j.is_discarded() || j.value("retcode", -1) != 0 || !j.contains("data"))
         return {};
     return j["data"].value("passport_qr_url", std::string{});
+}
+
+inline std::string PandaScanQRCode(const std::string_view url, const std::string_view ticket, GameType gameType)
+{
+    thread_local cpr::Session session;
+    return PandaScanQRCode(session, url, ticket, gameType);
 }
 
 inline bool PassportQRCodeLogin(
@@ -465,26 +478,40 @@ inline bool ScanQRLogin(const std::string_view url, const std::string_view ticke
     return !PandaScanQRCode(url, ticket, gameType).empty();
 }
 
-inline bool ConfirmQRLogin(const std::string_view url, const std::string_view uid, const std::string_view gameToken, const std::string_view ticket, GameType gameType)
+inline bool ConfirmQRLogin(
+    cpr::Session& session,
+    const std::string_view url,
+    const std::string_view uid,
+    const std::string_view gameToken,
+    const std::string_view ticket,
+    GameType gameType)
 {
     if (url.empty() || uid.empty() || gameToken.empty() || ticket.empty())
         return false;
 
-    const auto response = cpr::Post(
-        cpr::Url{ url },
-        cpr::Body{ nlohmann::json{
+    session.SetUrl(cpr::Url{ url });
+    session.SetBody(cpr::Body{ nlohmann::json{
             { "app_id", static_cast<int>(gameType) },
             { "device", device_id },
             { "ticket", ticket },
             { "payload", { { "proto", "Account" }, { "raw", nlohmann::json{ { "uid", uid }, { "token", gameToken } }.dump() } } } }
-                       .dump() },
-        cpr::Header{ { "Content-Type", "application/json" } });
+                                    .dump() });
+    session.SetHeader(cpr::Header{ { "Content-Type", "application/json" } });
+    session.SetConnectTimeout(cpr::ConnectTimeout{ 1500 });
+    session.SetTimeout(cpr::Timeout{ 3000 });
+    const auto response = session.Post();
 
     if (response.error || response.status_code < 200 || response.status_code >= 300 || response.text.empty())
         return false;
 
     const auto j = nlohmann::json::parse(response.text, nullptr, false);
     return !j.is_discarded() && j.value("retcode", -1) == 0;
+}
+
+inline bool ConfirmQRLogin(const std::string_view url, const std::string_view uid, const std::string_view gameToken, const std::string_view ticket, GameType gameType)
+{
+    thread_local cpr::Session session;
+    return ConfirmQRLogin(session, url, uid, gameToken, ticket, gameType);
 }
 
 inline std::string makeSign(const nlohmann::json& data)
